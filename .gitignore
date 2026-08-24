@@ -1,0 +1,6 @@
+.env
+venv/
+__pycache__/
+*.pyc
+
+test_rag_simple.py

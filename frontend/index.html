@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SERGAI - Smart Engagement for Responsive Government Assistant Intelligence</title>
+    <meta
+      name="description"
+      content="SERGAI: Smart Engagement for Responsive Government Assistant Intelligence - BPS Kabupaten Serdang Bedagai"
+    />
+
+    <!-- Fonts & Icons -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="assets/logo-bps.png" />
+
+    <!-- ✅ Tambahkan ini di <head>, sebelum custom CSS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="chat-container">
+      <!-- HEADER -->
+      <div class="chat-header">
+        <div class="logo-container">
+          <img
+            src="assets/logo-sergAI.png"
+            class="logo"
+            alt="Logo BPS"
+            onerror="
+              this.src =
+                'https://via.placeholder.com/55/006064/ffffff?text=sergAI'
+            "
+          />
+          <div class="status-indicator"></div>
+        </div>
+        <div class="header-info">
+          <div class="header-title">Smart Engagement for Responsive Government Assistant Intelligence</div>
+          <div class="header-subtitle">
+            <i class="fas fa-check-circle"></i>
+            <span id="statusText">Online - Tanya Data, sergAI Jawab!</span>
+          </div>
+        </div>
+          <div class="header-buttons">
+            <button class="header-btn" id="infoBtn" title="Informasi">
+              <i class="fas fa-info-circle"></i>
+            </button>
+            <button class="header-btn" id="clearBtn" title="Hapus Chat">
+              <i class="fas fa-trash-alt"></i>
+            </button>
+          </div>
+
+          <!-- Model Selector di bawah tombol -->
+          <div class="model-select-inline">
+            <select id="model-select">
+              <option value="gemini" selected>Gemini</option>
+              <option value="openai">GPT</option>
+              <option value="rag">RAG</option>
+              <option value="rag_dynamic">RAG Tabel Dinamis</option>
+            </select>
+          </div>
+        </div>
+
+      <!-- CHAT AREA -->
+      <div class="chat-box" id="chatBox">
+        <div class="empty-state" id="emptyState">
+          <i class="fas fa-robot"></i>
+          <h3>Selamat Datang 👋</h3>
+          <p>
+            Saya asisten virtual BPS Kabupaten Serdang Bedagai<br />
+            Siap membantu Anda mengakses data statistik resmi
+          </p>
+        </div>
+      </div>
+
+      <!-- TYPING INDICATOR -->
+      <div class="typing-indicator" id="typingIndicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>
+
+      <!-- INPUT AREA -->
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input
+            type="text"
+            id="userInput"
+            placeholder="Tanya data statistik..."
+            autocomplete="off"
+          />
+        </div>
+        <button class="send-btn" id="sendBtn">
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- INFO MODAL -->
+    <div class="modal" id="infoModal">
+      <div class="modal-content">
+        <div class="modal-header">Tentang sergAI</div>
+        <div class="modal-body">
+          <p><strong>sergAI</strong> (Smart Engagement for Responsive Government Assistant Intelligence)</p>
+          <p>
+            Asisten virtual resmi BPS Kabupaten Serdang Bedagai, dikembangkan
+            oleh <strong>Elgresia</strong>
+          </p>
+          <br />
+          <p><strong>Fitur:</strong></p>
+          <ul style="margin-left: 20px; margin-top: 5px">
+            <li>📊 Akses data statistik real-time via BPS WebAPI</li>
+            <li>📖 Penjelasan konsep statistik dari publikasi resmi</li>
+            <li>💬 Tanya jawab data BPS Kab. Serdang Bedagai</li>
+          </ul>
+          <br />
+          <p>
+            <small
+              >🔒 Data Anda tidak disimpan. Semua jawaban bersumber dari website
+              BPS Kab. Serdang Bedagai.</small
+            >
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn primary" id="closeModalBtn">Mengerti</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module" src="js/config.js"></script>
+    <script type="module" src="js/api.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

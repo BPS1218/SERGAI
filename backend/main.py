@@ -10,6 +10,8 @@ load_dotenv(os.path.join(_BASE, ".env"))   # muat backend/.env bila ada
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 import time
@@ -24,10 +26,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS: Allow frontend access
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔒 Di production, ganti dengan ["http://localhost:5500"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,50 +50,61 @@ class ChatResponse(BaseModel):
     timestamp: str
     success: bool
 
-# ✅ GANTI dengan ini:
+_FRONTEND_DIR = os.path.join(os.path.dirname(_BASE), "frontend")
+
+# ============================================================
+# ===== CUSTOM ROUTES (HARUS SEBELUM app.mount) ==============
+# ============================================================
+
+@app.get("/")
+async def root_welcome():
+    """Root URL → tampilkan halaman welcome (identitas)"""
+    return FileResponse(os.path.join(_FRONTEND_DIR, "welcome.html"))
+
+@app.get("/welcome")
+async def welcome_page():
+    """Alias untuk halaman welcome"""
+    return FileResponse(os.path.join(_FRONTEND_DIR, "welcome.html"))
+
+@app.get("/chat")
+async def chat_page():
+    """Halaman chat utama (setelah isi identitas)"""
+    return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
+
+# ============================================================
+# ===== API ROUTES ===========================================
+# ============================================================
+
+# Lazy load model
+_model_instance = None
+_last_active_model = None
+
 def get_active_model():
     """Lazy load model instance berdasarkan settings.active_model"""
     global _model_instance, _last_active_model
-    
-    # Cek jika model aktif berubah (misal dari .env diupdate)
     current_model = settings.active_model
-    
-    # Jika model berubah atau instance belum ada, reload
     if _model_instance is None or _last_active_model != current_model:
         print(f"🔄 Loading model: {current_model}")
         _model_instance = get_model(current_model)
         _last_active_model = current_model
-    
     return _model_instance
 
-# Tambah variabel global untuk tracking model terakhir
-_model_instance = None
-_last_active_model = None
-
-# Health check endpoint
 @app.get("/health")
 async def health_check():
-    model = get_model(settings.active_model)
     return {
         "status": "healthy",
         "model": get_active_model().get_model_info(),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
-# Main chat endpoint
-# ✅ DI DALAM chat_endpoint, ganti bagian pemanggilan model:
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
     start_time = time.time()
-    
     try:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Pertanyaan tidak boleh kosong")
         
-        # ✅ PRIORITAS: Pakai model dari frontend, fallback ke .env
         target_model = request.model or settings.active_model
-        
-        # Validasi & fallback aman
         if target_model not in ["gemini", "openai", "rag", "rag_dynamic"]:
             target_model = "gemini"
             
@@ -108,7 +121,7 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
         return ChatResponse(
             answer=response.answer,
             sources=[s.model_dump() for s in response.sources],
-            meta={**response.meta, "requested_model": target_model},  # ← Tambah info model di response
+            meta={**response.meta, "requested_model": target_model},
             timestamp=time.strftime("%H:%M:%S"),
             success=response.success
         )
@@ -123,15 +136,12 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
             success=False
         )
 
-# Optional: Endpoint untuk test BPS API connection
 @app.get("/api/bps/test")
 async def test_bps_connection():
-    """Test koneksi ke BPS WebAPI (tanpa query data)"""
+    """Test koneksi ke BPS WebAPI"""
     import httpx
-    
     if not settings.bps_api_key:
         return {"connected": False, "reason": "BPS_API_KEY not configured"}
-    
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             url = f"{settings.bps_base_url}/domain?key={settings.bps_api_key}"
@@ -144,15 +154,11 @@ async def test_bps_connection():
     except Exception as e:
         return {"connected": False, "error": str(e)}
 
-
-# ===== MOUNT FRONTEND STATICS =====
-from fastapi.staticfiles import StaticFiles
-
-_FRONTEND_DIR = os.path.join(os.path.dirname(_BASE), "frontend")
+# ============================================================
+# ===== MOUNT FRONTEND (HARUS TERAKHIR) ======================
+# ============================================================
 app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
 
-
-# Run server: uvicorn main:app --reload --port 8000
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=settings.port, reload=True)

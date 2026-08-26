@@ -1,7 +1,6 @@
 /**
  * SERGAI - Smart Engagement for Responsive Government Assistant Intelligence
- * UI Interactions & Chat Management
- * ✅ UPDATED: Fixed module imports + event listeners
+ * ✅ FINAL: Google login + sidebar riwayat (Google Sheets) + Shortcut Ctrl+B
  */
 
 import { CONFIG } from "./config.js";
@@ -17,63 +16,238 @@ const infoBtn = document.getElementById("infoBtn");
 const clearBtn = document.getElementById("clearBtn");
 const infoModal = document.getElementById("infoModal");
 const closeModalBtn = document.getElementById("closeModalBtn");
+const sidebar = document.getElementById("sidebar");
+const sidebarOpen = document.getElementById("sidebarOpen");
+const sidebarClose = document.getElementById("sidebarClose"); // ✅ Ikon tutup di kiri bawah
+const newChatBtn = document.getElementById("newChatBtn");
+const logoutBtn = document.getElementById("logoutBtn");
+const sessionList = document.getElementById("sessionList");
 
 // ===== State =====
 let chatHistory = [];
-let userName = "";
-let isFirstMessage = true;
+let userInfo = null;
+let currentSessionId = null;
 let isWaitingResponse = false;
+
+// ===== GOOGLE SHEETS HELPER =====
+function sheetPost(payload) {
+  return fetch(CONFIG.googleScriptUrl, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+    .then((r) => r.json())
+    .catch((e) => console.warn("Sheet error:", e));
+}
+
+function logMessage(role, content, model = "") {
+  if (!userInfo) return;
+  sheetPost({
+    action: "save_message",
+    session_id: currentSessionId,
+    email: userInfo.email,
+    name: userInfo.name,
+    unit: userInfo.unit,
+    role,
+    content,
+    model,
+  });
+}
+
+// ===== SESSION MANAGEMENT =====
+function getSessionId() {
+  let sid = localStorage.getItem("sergai_session_id");
+  if (!sid) {
+    sid = (crypto.randomUUID && crypto.randomUUID()) || "s" + Date.now();
+    localStorage.setItem("sergai_session_id", sid);
+  }
+  return sid;
+}
+
+function startNewSession() {
+  const sid = (crypto.randomUUID && crypto.randomUUID()) || "s" + Date.now();
+  localStorage.setItem("sergai_session_id", sid);
+  currentSessionId = sid;
+  chatHistory = [];
+  chatBox.innerHTML = "";
+  emptyState.style.display = "flex";
+  chatBox.appendChild(emptyState);
+  setTimeout(() => addBotMessage(CONFIG.branding.welcomeMessage, true), 300);
+  // ✅ Sidebar TIDAK ditutup di sini — hanya ditutup lewat ikon kiri bawah / Ctrl+B
+}
+
+function loadSessions() {
+  if (!userInfo) return;
+
+  // ✅ 1) Tampilkan cache localStorage dulu (langsung terlihat)
+  const cached = JSON.parse(
+    localStorage.getItem("sergai_sessions_cache") || "null",
+  );
+  if (cached && cached.length) {
+    renderSessionList(cached);
+  } else if (sessionList) {
+    // ✅ 2) Kalau belum ada cache, tampilkan spinner
+    sessionList.innerHTML =
+      '<div class="sb-loading"><div class="sb-spinner"></div>Memuat riwayat…</div>';
+  }
+
+  // ✅ 3) Fetch asli → update cache & render final
+  sheetPost({ action: "list_sessions", email: userInfo.email }).then((res) => {
+    if (res && res.ok) {
+      const sessions = res.sessions || [];
+      localStorage.setItem("sergai_sessions_cache", JSON.stringify(sessions));
+      renderSessionList(sessions);
+    }
+  });
+}
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderSessionList(sessions) {
+  if (!sessionList) return;
+  sessionList.innerHTML = "";
+  if (!sessions.length) {
+    sessionList.innerHTML = '<div class="sb-empty">Belum ada percakapan.</div>';
+    return;
+  }
+  sessions.forEach((s) => {
+    const item = document.createElement("div");
+    item.className =
+      "sb-item" + (s.session_id === currentSessionId ? " active" : "");
+    const t = new Date(s.updated_at);
+    const tstr =
+      t.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit" }) +
+      " " +
+      t.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    item.innerHTML =
+      '<i class="fas fa-comment-dots"></i>' +
+      '<span class="sb-item-text">' +
+      escapeHtml(s.title || "(Percakapan)") +
+      "</span>" +
+      '<span class="sb-item-time">' +
+      tstr +
+      "</span>" +
+      '<button class="sb-item-del" title="Hapus sesi"><i class="fas fa-trash"></i></button>';
+    item.addEventListener("click", () => openSession(s.session_id));
+    item.querySelector(".sb-item-del").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!confirm("Hapus percakapan ini dari riwayat?")) return;
+      sheetPost({ action: "delete_session", session_id: s.session_id }).then(
+        () => {
+          if (s.session_id === currentSessionId) startNewSession();
+          loadSessions();
+        },
+      );
+    });
+    sessionList.appendChild(item);
+  });
+}
+
+function openSession(sid) {
+  currentSessionId = sid;
+  localStorage.setItem("sergai_session_id", sid);
+  sheetPost({ action: "get_session", session_id: sid }).then((res) => {
+    chatBox.innerHTML = "";
+    chatHistory = [];
+    const msgs = (res && res.messages) || [];
+    if (!msgs.length) {
+      emptyState.style.display = "flex";
+      chatBox.appendChild(emptyState);
+    } else {
+      emptyState.style.display = "none";
+      msgs.forEach((m) => appendMessage(m.content, m.role));
+    }
+    loadSessions(); // refresh highlight "active" di sidebar
+    scrollToBottom();
+    // ✅ Sidebar TIDAK ditutup di sini
+  });
+}
+
+// ===== SIDEBAR USER & TOGGLE =====
+function setupSidebarUser() {
+  const n = document.getElementById("sbUserName");
+  const u = document.getElementById("sbUserUnit");
+  const a = document.getElementById("sbUserAva");
+  if (n) n.textContent = userInfo.name;
+  if (u) u.textContent = userInfo.unit;
+  if (a && userInfo.picture)
+    a.innerHTML = '<img src="' + userInfo.picture + '" alt="">';
+}
+
+function closeSidebar() {
+  if (sidebar) sidebar.classList.remove("open");
+}
+
+function toggleSidebar() {
+  if (sidebar) sidebar.classList.toggle("open");
+}
 
 // ===== INITIALIZATION =====
 document.addEventListener("DOMContentLoaded", () => {
-  // Load saved state
+  userInfo = JSON.parse(localStorage.getItem("sergai_user") || "null");
+  if (!userInfo || !userInfo.email) {
+    window.location.href = "/";
+    return;
+  }
+
+  currentSessionId = getSessionId();
+
+  const statusText = document.getElementById("statusText");
+  if (statusText) {
+    statusText.textContent = `Halo, ${userInfo.name.split(" ")[0]}! Tanya Data, sergAI Jawab!`;
+  }
+
+  setupSidebarUser();
   loadChatState();
+  loadSessions();
 
-  // Show welcome message
-  setTimeout(() => {
-    addBotMessage(CONFIG.branding.welcomeMessage, true);
-  }, 500);
+  setTimeout(() => addBotMessage(CONFIG.branding.welcomeMessage, true), 500);
 
-  // Setup all event listeners
   setupEventListeners();
-
-  // ✅ INISIALISASI DROPDOWN MODEL (TAMBAH INI)
   initModelSelector();
-
-  // Update UI with branding
   document.title = `${CONFIG.branding.name} - ${CONFIG.branding.tagline}`;
 });
 
 // ===== EVENT LISTENERS =====
 function setupEventListeners() {
-  // Enter key to send message
   userInput.addEventListener("keypress", (e) => {
-    if (e.key === "Enter" && !isWaitingResponse) {
-      sendMessage();
-    }
+    if (e.key === "Enter" && !isWaitingResponse) sendMessage();
   });
 
-  // Send button click
   sendBtn?.addEventListener("click", () => {
     if (!isWaitingResponse) sendMessage();
   });
 
-  // Info button
   infoBtn?.addEventListener("click", showInfo);
-
-  // Clear chat button
   clearBtn?.addEventListener("click", clearChat);
-
-  // Close modal button
   closeModalBtn?.addEventListener("click", closeModal);
-
-  // Close modal when clicking outside
   infoModal?.addEventListener("click", (e) => {
     if (e.target === infoModal) closeModal();
   });
-
-  // Auto-resize input (optional)
   userInput.addEventListener("input", autoResizeInput);
+
+  // Sidebar Events
+  newChatBtn?.addEventListener("click", startNewSession);
+  sidebarOpen?.addEventListener("click", toggleSidebar);
+  sidebarClose?.addEventListener("click", closeSidebar); // ✅ Klik ikon bawah saat sidebar terbuka
+
+  logoutBtn?.addEventListener("click", () => {
+    if (!confirm("Keluar dari akun Anda?")) return;
+    localStorage.removeItem("sergai_user");
+    localStorage.removeItem("sergai_session_id");
+    window.location.href = "/";
+  });
+
+  // ✅ Shortcut Keyboard: Ctrl+B (atau Cmd+B di Mac) untuk toggle sidebar
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+      e.preventDefault(); // Mencegah browser mengeksekusi default bold
+      toggleSidebar();
+    }
+  });
 }
 
 // ===== MESSAGE HANDLING =====
@@ -81,20 +255,18 @@ function sendMessage() {
   const text = userInput.value.trim();
   if (!text || isWaitingResponse) return;
 
-  // Add user message
   addUserMessage(text);
+  logMessage("user", text);
   userInput.value = "";
   isWaitingResponse = true;
   sendBtn.disabled = true;
-
-  // Show typing indicator
   showTyping();
 
-  // Call API
-  asksergAI(text, generateUserId())
+  asksergAI(text, userInfo.email)
     .then((apiResult) => {
       const formatted = formatBotResponse(apiResult, text);
       addBotMessage(formatted.text, false, formatted.meta);
+      logMessage("bot", formatted.text, apiResult.meta?.requested_model || "");
     })
     .catch((err) => {
       console.error("Unexpected error:", err);
@@ -106,45 +278,26 @@ function sendMessage() {
       sendBtn.disabled = false;
       userInput.focus();
       saveChatState();
+      loadSessions();
     });
 }
 
 function addUserMessage(text) {
   hideEmptyState();
-
-  const messageEl = createMessageElement(text, "user");
-  chatBox.appendChild(messageEl);
+  chatBox.appendChild(createMessageElement(text, "user"));
   scrollToBottom();
-
-  // Save to history
   chatHistory.push({
     role: "user",
     content: text,
     timestamp: new Date().toISOString(),
   });
-
-  // Detect name from first message
-  if (!userName && isFirstMessage) {
-    userName = extractName(text) || "Teman";
-    isFirstMessage = false;
-  }
 }
 
 function addBotMessage(text, showQuickReplies = false, meta = {}) {
   hideEmptyState();
-
-  const messageEl = createMessageElement(text, "bot", meta);
-  chatBox.appendChild(messageEl);
-
-  // Show quick replies for first bot message
-  if (showQuickReplies && isFirstMessage) {
-    showQuickReplyButtons();
-    isFirstMessage = false;
-  }
-
+  chatBox.appendChild(createMessageElement(text, "bot", meta));
+  if (showQuickReplies) showQuickReplyButtons();
   scrollToBottom();
-
-  // Save to history
   chatHistory.push({
     role: "bot",
     content: text,
@@ -153,19 +306,31 @@ function addBotMessage(text, showQuickReplies = false, meta = {}) {
   });
 }
 
+function appendMessage(text, sender) {
+  hideEmptyState();
+  chatBox.appendChild(createMessageElement(text, sender));
+  chatHistory.push({
+    role: sender,
+    content: text,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 // ===== UI HELPERS =====
+function getUserAvatarHtml() {
+  if (userInfo && userInfo.picture) {
+    // ✅ Naikkan resolusi foto profil Google (default s96 → s200)
+    const pic = userInfo.picture.replace(/=s\d+(?:-c)?$/i, "=s200-c");
+    return '<img src="' + pic + '" alt="" />';
+  }
+  return '<i class="fas fa-user"></i>'; // fallback kalau foto tidak ada
+}
+
 function createMessageElement(text, sender, meta = {}) {
   const div = document.createElement("div");
   div.className = `message ${sender}`;
-
   const avatar =
-    sender === "bot"
-      ? '<i class="fas fa-robot"></i>'
-      : '<i class="fas fa-user"></i>';
-
-  // ✅ Citation sudah include di dalam 'text' dari formatBotResponse (api.js)
-  // Jadi tidak perlu ditambahkan lagi di sini untuk menghindari duplikasi
-
+    sender === "bot" ? '<i class="fas fa-robot"></i>' : getUserAvatarHtml();
   div.innerHTML = `
     <div class="message-avatar">${avatar}</div>
     <div class="message-content">
@@ -173,15 +338,12 @@ function createMessageElement(text, sender, meta = {}) {
       <div class="message-time">${formatTime(new Date())}</div>
     </div>
   `;
-
   return div;
 }
 
 function showQuickReplyButtons() {
   const container = document.createElement("div");
   container.className = "quick-replies";
-  // ✅ Margin sudah diatur di CSS, tidak perlu inline style
-
   CONFIG.quickReplies.forEach((reply) => {
     const btn = document.createElement("button");
     btn.className = "quick-reply-btn";
@@ -192,7 +354,6 @@ function showQuickReplyButtons() {
     };
     container.appendChild(btn);
   });
-
   chatBox.appendChild(container);
   scrollToBottom();
 }
@@ -229,51 +390,21 @@ function autoResizeInput() {
   this.style.height = this.scrollHeight + "px";
 }
 
-// ===== UTILITY FUNCTIONS =====
-function extractName(text) {
-  const patterns = [
-    /nama\s+(saya\s+)?([a-zA-Z\s]+)/i,
-    /saya\s+([a-zA-Z\s]+)/i,
-    /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)$/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match && match[2]) {
-      const name = match[2].trim();
-      if (name.length >= 2 && name.length <= 30) {
-        return name;
-      }
-    }
-  }
-  return null;
-}
-
-function generateUserId() {
-  return (
-    localStorage.getItem("sergai_user_id") ||
-    (localStorage.setItem(
-      "sergai_user_id",
-      crypto.randomUUID?.() || Date.now().toString(),
-    ) &&
-      localStorage.getItem("sergai_user_id"))
-  );
-}
-
 // ===== CHAT MANAGEMENT =====
 function clearChat() {
-  if (!confirm("Hapus semua riwayat percakapan?")) return;
+  if (!confirm("Hapus percakapan ini dari layar dan riwayat?")) return;
 
-  chatBox.innerHTML = "";
-  chatBox.appendChild(emptyState);
-  emptyState.style.display = "flex";
-  chatHistory = [];
-  userName = "";
-  isFirstMessage = true;
+  // ✅ Hapus session saat ini di Google Sheets (hilang dari sidebar)
+  if (currentSessionId) {
+    sheetPost({ action: "delete_session", session_id: currentSessionId }).then(
+      () => {
+        loadSessions(); // refresh daftar riwayat
+      },
+    );
+  }
 
-  setTimeout(() => {
-    addBotMessage(CONFIG.branding.welcomeMessage, true);
-  }, 300);
+  // ✅ Bersihkan layar + langsung buat sesi baru
+  startNewSession();
 
   localStorage.removeItem("sergai_chat_history");
 }
@@ -293,7 +424,6 @@ function saveChatState() {
       "sergai_chat_history",
       JSON.stringify({
         history: chatHistory.slice(-50),
-        userName,
         timestamp: Date.now(),
       }),
     );
@@ -306,21 +436,7 @@ function loadChatState() {
   try {
     const saved = localStorage.getItem("sergai_chat_history");
     if (!saved) return;
-
-    const { history, userName: savedName } = JSON.parse(saved);
-    if (savedName) userName = savedName;
-
-    // Optional: Restore history (disabled by default)
-    // if (history?.length) {
-    //   history.forEach(msg => {
-    //     const el = createMessageElement(msg.content, msg.role, msg.meta);
-    //     chatBox.appendChild(el);
-    //   });
-    //   hideEmptyState();
-    // }
   } catch (e) {
     console.warn("Failed to load chat state:", e);
   }
 }
-
-// ✅ TIDAK PERLU window.xxx karena sudah pakai event listeners + modules

@@ -4,10 +4,15 @@
  */
 
 export const CONFIG = {
+  googleClientId:
+    "445651010935-rerc0ceit8mom8n413fjo72cv0d0b7dj.apps.googleusercontent.com",
+  googleScriptUrl:
+    "https://script.google.com/macros/s/AKfycbzRt6Z5S8i9bFv2kuom4J9cWsRqSs4u3iDv13DmLsL2rWvvyuQuXYoxlPnAhgkhbptVLg/exec",
   // 🎨 Branding
   branding: {
     name: "SERGAI",
-    fullName: "Smart Engagement for Responsive Government Assistant Intelligence",
+    fullName:
+      "Smart Engagement for Responsive Government Assistant Intelligence",
     tagline: "Tanya Data, sergAI Jawab!",
     developer: "Elgresia -  CPNS 2026",
     // ✅ FIX: Hardcode nama langsung agar tidak error "Cannot access before initialization"

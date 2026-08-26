@@ -20,7 +20,7 @@
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="assets/logo-bps.png" />
 
-    <!-- ✅ Tambahkan ini di <head>, sebelum custom CSS -->
+    <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -33,7 +33,33 @@
   </head>
   <body>
     <div class="chat-container">
-      <!-- HEADER -->
+      <!-- SIDEBAR -->
+      <aside class="sidebar" id="sidebar">
+        <!-- ✅ Info pengguna di ATAS riwayat -->
+        <div class="sb-user-top">
+          <div class="sb-user">
+            <div class="sb-ava" id="sbUserAva"><i class="fas fa-user"></i></div>
+            <div class="sb-user-info">
+              <strong id="sbUserName">—</strong>
+              <small id="sbUserUnit">—</small>
+            </div>
+          </div>
+          <button class="sb-logout" id="logoutBtn" title="Keluar">
+            <i class="fas fa-sign-out-alt"></i>
+          </button>
+        </div>
+
+        <button class="sb-new-btn" id="newChatBtn">
+          <i class="fas fa-plus"></i> Obrolan Baru
+        </button>
+
+        <div class="sb-section-label">Riwayat</div>
+        <div class="sb-list" id="sessionList">
+          <div class="sb-empty">Belum ada percakapan.</div>
+        </div>
+      </aside>
+
+      <!-- HEADER (selalu sama) -->
       <div class="chat-header">
         <div class="logo-container">
           <img
@@ -65,7 +91,7 @@
           </button>
         </div>
 
-        <!-- Model Selector di bawah tombol -->
+        <!-- Model Selector -->
         <div class="model-select-inline">
           <select id="model-select">
             <option value="gemini" selected>Gemini</option>
@@ -109,6 +135,14 @@
           <i class="fas fa-paper-plane"></i>
         </button>
       </div>
+
+      <!-- ✅ Ikon buka/tutup menu: FIXED di kiri bawah, posisi tidak pindah-pindah -->
+      <button class="sb-open" id="sidebarOpen" title="Buka menu (Ctrl+B)">
+        <i class="fas fa-table-columns"></i>
+      </button>
+      <button class="sb-close" id="sidebarClose" title="Tutup menu (Ctrl+B)">
+        <i class="fas fa-table-columns"></i>
+      </button>
     </div>
 
     <!-- INFO MODAL -->

@@ -102,10 +102,10 @@ class RAGUnifiedModel(BaseModel):
                         "Responsive Government Assistant Intelligence), asisten "
                         "virtual resmi BPS Kabupaten Serdang Bedagai.\n\n"
                         "Saya siap membantu Anda mengakses data statistik seperti:\n"
-                        "• 📊 PDRB & perekonomian daerah\n"
-                        "• 👥 Jumlah penduduk & demografi\n"
-                        "• 📉 Tingkat kemiskinan & IPM\n"
-                        "• 🌾 Produksi pertanian & perikanan\n\n"
+                        "• 📊 Ekonomi\n"
+                        "• 👥 Penduduk\n"
+                        "• 📉 Kemisikinan\n"
+                        "• 🌾 Produksi pertanian\n\n"
                         "Silakan tanyakan data spesifik yang Anda butuhkan!"
                     ),
                     sources=[Source(

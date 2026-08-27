@@ -967,3 +967,567 @@ button,
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
 }
+
+/* =====================================================
+   FINAL RESPONSIVE OVERRIDE — wajib di PALING BAWAH file
+   ===================================================== */
+@media (max-width: 768px) {
+  /* --- Header: 1 baris, semua kontrol HARUS terlihat --- */
+  .chat-header {
+    flex-wrap: nowrap;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .header-info {
+    flex: 1 1 auto;
+    min-width: 0; /* ✅ boleh menyusut */
+  }
+  .header-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; /* judul dipotong ... */
+    font-size: 11px;
+  }
+  .header-subtitle {
+    font-size: 9px;
+    white-space: nowrap;
+  }
+  .header-buttons {
+    flex-shrink: 0;
+    gap: 6px;
+  } /* tombol tidak boleh hilang */
+  .model-select-inline {
+    flex-shrink: 0;
+  } /* dropdown tidak boleh hilang */
+  .model-select-inline select {
+    min-width: 90px;
+    max-width: 130px;
+    font-size: 9px;
+  }
+
+  /* --- Input bar: tidak ada yang kepotong kanan --- */
+  .input-area {
+    padding: 12px 12px 12px 60px;
+    gap: 8px;
+  }
+  .chat-container:has(.sidebar.open) .input-area {
+    padding-left: 12px;
+  }
+  .input-wrapper {
+    min-width: 0;
+  } /* ✅ fleksibel menyusut */
+  #userInput {
+    min-width: 0;
+    padding: 12px 16px;
+  }
+  .send-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+
+  /* --- Ikon toggle sedikit lebih kecil di HP --- */
+  .sb-open,
+  .sb-close {
+    left: 14px;
+    bottom: 20px;
+    width: 38px;
+    height: 38px;
+    font-size: 14px;
+  }
+
+  /* --- Pesan & quick replies lebih lega --- */
+  .message {
+    max-width: 92%;
+  }
+  .quick-replies {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-header {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .logo {
+    width: 32px;
+    height: 32px;
+  }
+  .header-btn {
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+  }
+  .header-title {
+    font-size: 10px;
+  }
+  .model-select-inline select {
+    min-width: 78px;
+    padding: 4px 20px 4px 8px;
+  }
+  .model-select-inline::after {
+    right: 6px;
+    font-size: 7px;
+  }
+}
+
+/* =====================================================
+   MOBILE FINAL FIX — wajib di PALING BAWAH style.css
+   ===================================================== */
+@media (max-width: 768px) {
+  /* ✅ KUNCI ANTI-MELUBER: semua anak grid boleh menyusut */
+  .chat-container > * {
+    min-width: 0 !important;
+  }
+
+  .chat-container {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    grid-template-columns: 1fr !important;
+    overflow: hidden;
+  }
+
+  /* Header: 1 baris, judul dipotong "...", tombol tetap terlihat */
+  .chat-header {
+    flex-wrap: nowrap !important;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .header-info {
+    flex: 1 1 auto;
+    min-width: 0 !important;
+  }
+  .header-title {
+    white-space: normal !important; /* ✅ boleh wrap ke bawah */
+    display: -webkit-box;
+    -webkit-line-clamp: 2; /* maksimal 2 baris */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: clip;
+    line-height: 1.25;
+  }
+  .header-subtitle {
+    white-space: nowrap; /* subtitle tetap 1 baris */
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .header-buttons {
+    flex-shrink: 0;
+    display: flex;
+    gap: 6px;
+  }
+
+  /* Area chat & pesan */
+  .chat-box {
+    overflow-x: hidden;
+  }
+  .message {
+    max-width: 92% !important;
+  }
+  .bubble {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+
+  /* Quick replies: wajib wrap di dalam layar */
+  .quick-replies {
+    flex-wrap: wrap !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    padding: 0 12px;
+  }
+
+  /* Input bar: kirim tidak terpotong */
+  .input-area {
+    padding: 10px 10px 10px 56px !important;
+    gap: 8px;
+  }
+  .chat-container:has(.sidebar.open) .input-area {
+    padding-left: 10px !important;
+  }
+  .input-wrapper {
+    min-width: 0 !important;
+  }
+  #userInput {
+    min-width: 0;
+  }
+  .send-btn {
+    flex-shrink: 0;
+  }
+
+  /* Drawer sidebar tidak melebihi layar */
+  .sidebar {
+    width: min(280px, 85vw);
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-header {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .logo {
+    width: 30px;
+    height: 30px;
+  }
+  .header-btn {
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+  }
+  .header-title {
+    font-size: 10px;
+  }
+  .header-subtitle {
+    font-size: 8px;
+  }
+}
+
+/* =====================================================
+   UKURAN FONT MOBILE — sidebar & chat
+   ===================================================== */
+@media (max-width: 480px) {
+  /* ----- Menu samping (sidebar) ----- */
+  #sbUserName {
+    font-size: 12px;
+  }
+  #sbUserUnit {
+    font-size: 9.5px;
+  }
+  #newChatBtn {
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+  .sb-label,
+  .sb-title {
+    font-size: 9px;
+    letter-spacing: 1px;
+  } /* tulisan "RIWAYAT" */
+  .sb-item {
+    padding: 8px 10px;
+  }
+  .sb-item-text {
+    font-size: 11px;
+  }
+  .sb-item-time {
+    font-size: 8.5px;
+  }
+
+  /* ----- Header chat ----- */
+  .header-title {
+    font-size: 11px;
+  }
+  .header-subtitle {
+    font-size: 9px;
+  }
+
+  /* ----- Isi chat ----- */
+  .bubble {
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+  .message-time {
+    font-size: 8.5px;
+  }
+  .quick-reply-btn {
+    font-size: 10px;
+    padding: 6px 10px;
+  }
+  #userInput {
+    font-size: 12px;
+  }
+}
+
+/* Layar super kecil (≤320px): lebih rapat lagi */
+@media (max-width: 320px) {
+  .bubble {
+    font-size: 11px;
+  }
+  .quick-reply-btn {
+    font-size: 9.5px;
+    padding: 5px 8px;
+  }
+  #sbUserName {
+    font-size: 11px;
+  }
+  .sb-item-text {
+    font-size: 10px;
+  }
+}
+
+/* =====================================================
+   UKURAN DESKTOP — nama tampil penuh & font lebih besar
+   ===================================================== */
+@media (min-width: 769px) {
+  /* ----- Header atas ----- */
+  .header-title {
+    font-size: 15px;
+  }
+  .header-subtitle {
+    font-size: 11.5px;
+  }
+
+  /* ----- Menu samping (sidebar) ----- */
+  #sbUserName {
+    font-size: 13.5px;
+    white-space: normal; /* ✅ nama TIDAK dipotong, turun ke bawah */
+    display: -webkit-box;
+    -webkit-line-clamp: 2; /* maksimal 2 baris */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: clip;
+    line-height: 1.3;
+  }
+  #sbUserUnit {
+    font-size: 10.5px;
+  }
+  #newChatBtn {
+    font-size: 13px;
+  }
+  .sb-item-text {
+    font-size: 12.5px;
+  }
+  .sb-item-time {
+    font-size: 9.5px;
+  }
+
+  /* ----- Isi chat ----- */
+  .bubble {
+    font-size: 13px;
+  }
+  .message-time {
+    font-size: 10px;
+  }
+  .quick-reply-btn {
+    font-size: 12px;
+  }
+  #userInput {
+    font-size: 13px;
+  }
+}
+
+/* ✅ Nama user tampil FULL — kalau kepanjangan turun ke bawah */
+#sbUserName {
+  white-space: normal !important; /* boleh wrap */
+  display: block !important;
+  -webkit-line-clamp: none !important; /* hapus batas 2 baris */
+  overflow: visible !important;
+  text-overflow: clip !important; /* hapus titik-titik "…" */
+  word-break: break-word; /* kata sangat panjang tetap patah rapi */
+  line-height: 1.3;
+}
+
+/* =====================================================
+   SIDEBAR 501–768px: MENGGESER chat (REVISI FINAL)
+   ===================================================== */
+@media (min-width: 501px) and (max-width: 768px) {
+  /* Sidebar masuk aliran grid, mulai DI BAWAH header */
+  .sidebar {
+    position: static !important;
+    transform: none !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0;
+    z-index: 1 !important;
+    box-shadow: none !important;
+    overflow: hidden;
+    grid-column: 1 !important;
+    /* grid-row TIDAK diset → ikut aturan desktop (mulai baris 2) */
+  }
+
+  /* ✅ Header tetap FULL WIDTH seperti desktop / gambar 1 */
+  .chat-header {
+    grid-column: 1 / -1 !important;
+  }
+
+  /* Konten chat di kolom kanan */
+  .chat-box,
+  .typing-indicator,
+  .input-area {
+    grid-column: 2 !important;
+  }
+
+  /* Tertutup = 0, terbuka = 250px → chat bergeser halus */
+  .chat-container {
+    grid-template-columns: 0 1fr !important;
+    transition: grid-template-columns 0.3s ease;
+  }
+  .chat-container:has(.sidebar.open) {
+    grid-template-columns: 250px 1fr !important;
+  }
+
+  /* ✅ Hilangkan strip gelap saat sidebar tertutup */
+  .chat-container:not(:has(.sidebar.open)) .sidebar {
+    padding: 0 !important;
+  }
+}
+
+/* ✅ Tombol quick reply rata tengah */
+.quick-replies {
+  justify-content: center !important; /* setiap baris rata tengah */
+  width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding: 4px 12px !important;
+}
+
+.msg-link {
+  color: #1a73e8;
+  text-decoration: underline;
+  word-break: break-all;
+}
+.msg-link:hover {
+  color: #0d5bbd;
+  text-decoration: none;
+}
+
+/* ===== Kartu tabel data ===== */
+.table-card {
+  max-width: 92%;
+  margin: 6px auto 14px;
+}
+.table-card-inner {
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.table-title {
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 8px;
+  color: #0f2a4a;
+}
+.table-scroll {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+}
+.data-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+.data-table th,
+.data-table td {
+  border: 1px solid #e0e0e0;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.data-table thead th {
+  background: #0f2a4a;
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.data-table tbody tr:nth-child(even) {
+  background: #f7f9fc;
+}
+.table-meta {
+  font-size: 10px;
+  color: #666;
+  margin: 6px 2px;
+}
+.table-download-btn {
+  background: #0f2a4a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.table-download-btn:hover {
+  background: #173b66;
+}
+
+/* Tabel dalam bubble chat */
+.bubble .table-card-inner {
+  margin: 12px 0;
+}
+.message.bot .bubble:has(.table-card-inner) {
+  max-width: 95%;
+}
+
+/* ===== Kartu tabel data (dalam bubble) ===== */
+.bubble .table-card-inner {
+  margin: 12px 0;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.table-title {
+  font-weight: 700;
+  font-size: 12px;
+  color: #0f2a4a;
+  flex: 1;
+  min-width: 0;
+}
+.table-download-btn {
+  background: #0f2a4a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.table-download-btn:hover {
+  background: #173b66;
+}
+.table-scroll {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+}
+.data-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+.data-table th,
+.data-table td {
+  border: 1px solid #e0e0e0;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.data-table thead th {
+  background: #0f2a4a;
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.data-table tbody tr:nth-child(even) {
+  background: #f7f9fc;
+}
+.table-meta {
+  font-size: 10px;
+  color: #666;
+  margin-top: 6px;
+}
+.message.bot .bubble:has(.table-card-inner) {
+  max-width: 95%;
+}

@@ -4,7 +4,7 @@
  */
 
 import { CONFIG } from "./config.js";
-import { asksergAI, formatBotResponse, initModelSelector } from "./api.js";
+import { asksergAI, formatBotResponse } from "./api.js";
 
 // ===== DOM Elements =====
 const chatBox = document.getElementById("chatBox");
@@ -98,6 +98,16 @@ function loadSessions() {
       renderSessionList(sessions);
     }
   });
+}
+
+// ✅ Ubah URL dalam teks jadi link yang bisa diklik
+function linkify(text) {
+  const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
+  return text.replace(
+    urlRegex,
+    (url) =>
+      `<a href="${url}" target="_blank" rel="noopener noreferrer" class="msg-link">${url}</a>`,
+  );
 }
 
 function escapeHtml(s) {
@@ -207,7 +217,6 @@ document.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => addBotMessage(CONFIG.branding.welcomeMessage, true), 500);
 
   setupEventListeners();
-  initModelSelector();
   document.title = `${CONFIG.branding.name} - ${CONFIG.branding.tagline}`;
 });
 
@@ -264,9 +273,13 @@ function sendMessage() {
 
   asksergAI(text, userInfo.email)
     .then((apiResult) => {
+      console.log("🔍 TABLE PAYLOAD:", apiResult.table);
       const formatted = formatBotResponse(apiResult, text);
-      addBotMessage(formatted.text, false, formatted.meta);
-      logMessage("bot", formatted.text, apiResult.meta?.requested_model || "");
+      addBotMessage(formatted.text, false, formatted.meta, apiResult.table);
+      // ✅ Log model_used (gemini/openai) dari backend ke Google Sheets
+      const modelUsed = apiResult.meta?.model_used || "";
+      const wasFallback = apiResult.meta?.fallback ? " (fallback)" : "";
+      logMessage("bot", formatted.text, modelUsed + wasFallback);
     })
     .catch((err) => {
       console.error("Unexpected error:", err);
@@ -293,9 +306,14 @@ function addUserMessage(text) {
   });
 }
 
-function addBotMessage(text, showQuickReplies = false, meta = {}) {
+function addBotMessage(
+  text,
+  showQuickReplies = false,
+  meta = {},
+  table = null,
+) {
   hideEmptyState();
-  chatBox.appendChild(createMessageElement(text, "bot", meta));
+  chatBox.appendChild(createMessageElement(text, "bot", meta, table));
   if (showQuickReplies) showQuickReplyButtons();
   scrollToBottom();
   chatHistory.push({
@@ -326,19 +344,127 @@ function getUserAvatarHtml() {
   return '<i class="fas fa-user"></i>'; // fallback kalau foto tidak ada
 }
 
-function createMessageElement(text, sender, meta = {}) {
+function createMessageElement(text, sender, meta = {}, table = null) {
   const div = document.createElement("div");
   div.className = `message ${sender}`;
   const avatar =
     sender === "bot" ? '<i class="fas fa-robot"></i>' : getUserAvatarHtml();
+
+  let bubbleContent = linkify(text);
+
+  // ✅ Sisipkan tabel SEBELUM bagian 📊 Data (kalau ada tabel & pesan bot)
+  if (sender === "bot" && table) {
+    const tableHtml = buildTableHtml(table);
+
+    // Cari posisi penyisipan: sebelum 📊 Data, atau sebelum 💡 Catatan, atau di akhir
+    const insertMarkers = [
+      "• Definisi:",
+      "Definisi:",
+      "💡 Catatan:",
+      "📊 Data:",
+      "📖 Sumber:",
+    ];
+    let insertPos = -1;
+    for (const marker of insertMarkers) {
+      const idx = bubbleContent.indexOf(marker);
+      if (idx !== -1) {
+        insertPos = idx;
+        break;
+      }
+    }
+
+    if (insertPos !== -1) {
+      bubbleContent =
+        bubbleContent.slice(0, insertPos) +
+        tableHtml +
+        bubbleContent.slice(insertPos);
+    } else {
+      bubbleContent += tableHtml; // Fallback: di akhir
+    }
+  }
+
   div.innerHTML = `
     <div class="message-avatar">${avatar}</div>
     <div class="message-content">
-      <div class="bubble">${text}</div>
+      <div class="bubble">${bubbleContent}</div>
       <div class="message-time">${formatTime(new Date())}</div>
     </div>
   `;
+  if (table) {
+    div
+      .querySelector(".table-download-btn")
+      ?.addEventListener("click", () => downloadTableExcel(table));
+  }
   return div;
+}
+
+// ===== TABEL DATA (di dalam bubble) + UNDUH XLSX =====
+function buildTableHtml(table) {
+  let html =
+    '<div class="table-card-inner">' +
+    '<div class="table-header">' +
+    '<div class="table-title">📋 ' +
+    escapeHtml(table.title || "Tabel Data") +
+    "</div>" +
+    '<button class="table-download-btn">⬇️ Unduh Excel</button>' +
+    "</div>" +
+    '<div class="table-scroll"><table class="data-table"><thead><tr>';
+  (table.columns || []).forEach(
+    (c) => (html += "<th>" + escapeHtml(c) + "</th>"),
+  );
+  html += "</tr></thead><tbody>";
+  (table.rows || []).forEach((r) => {
+    html +=
+      "<tr>" +
+      r.map((v) => "<td>" + escapeHtml(v) + "</td>").join("") +
+      "</tr>";
+  });
+  html +=
+    "</tbody></table></div>" +
+    '<div class="table-meta">' +
+    (table.total_rows || (table.rows || []).length) +
+    " baris • Sumber: " +
+    escapeHtml(table.source || "-") +
+    "</div>" +
+    "</div>";
+  return html;
+}
+
+function downloadTableExcel(table) {
+  const name = (table.title || "data-sergai").replace(/[\\/:*?"<>|]+/g, "_");
+  const toNum = (v) => {
+    const s = String(v ?? "").trim();
+    if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s))
+      return parseFloat(s.replace(/,/g, ""));
+    if (/^-?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+    return s;
+  };
+  if (window.XLSX) {
+    const aoa = [table.columns].concat(
+      table.rows.map((r) => r.map((v, i) => (i === 0 ? v : toNum(v)))),
+    );
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Data");
+    XLSX.writeFile(wb, name + ".xlsx");
+  } else {
+    // Fallback CSV bila CDN gagal dimuat
+    const esc = (v) => {
+      v = String(v ?? "");
+      return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    };
+    const lines = [table.columns.map(esc).join(",")].concat(
+      table.rows.map((r) => r.map(esc).join(",")),
+    );
+    const blob = new Blob(["\ufeff" + lines.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name + ".csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
 }
 
 function showQuickReplyButtons() {

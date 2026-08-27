@@ -74,7 +74,6 @@ export async function asksergAI(question, userId = "web-user") {
         question: question.trim(),
         userId,
         timestamp: new Date().toISOString(),
-        model: document.getElementById("model-select")?.value || "gemini",
       }),
       signal: controller.signal,
     });
@@ -94,6 +93,7 @@ export async function asksergAI(question, userId = "web-user") {
     return {
       success: true,
       answer: data.answer,
+      table: data.table,
       meta: data.meta || {},
       sources: data.sources || [],
       timestamp: new Date().toLocaleTimeString("id-ID"),

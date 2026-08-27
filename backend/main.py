@@ -1,6 +1,6 @@
 """
 sergAI Backend - FastAPI Server
-Main entry point untuk API chatbot
+✅ Alur baru: single orchestrator RAGUnifiedModel (tanpa pilihan model dari frontend)
 """
 import os
 from dotenv import load_dotenv
@@ -17,13 +17,14 @@ from typing import Optional, List, Dict
 import time
 
 from config import settings
-from models import get_model, ModelResponse
+from models import ModelResponse
+from models.rag_unified import RAGUnifiedModel
 
 # Initialize FastAPI app
 app = FastAPI(
     title="sergAI Backend API",
     description="API untuk chatbot BPS Kabupaten Serdang Bedagai",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # CORS
@@ -41,11 +42,11 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = "anonymous"
     chat_history: Optional[List[Dict]] = Field(default_factory=list)
     context: Optional[Dict] = None
-    model: Optional[str] = None
 
 class ChatResponse(BaseModel):
     answer: str
     sources: List[Dict] = []
+    table: Optional[Dict] = None   # ✅ baru
     meta: Dict = {}
     timestamp: str
     success: bool
@@ -58,42 +59,35 @@ _FRONTEND_DIR = os.path.join(os.path.dirname(_BASE), "frontend")
 
 @app.get("/")
 async def root_welcome():
-    """Root URL → tampilkan halaman welcome (identitas)"""
     return FileResponse(os.path.join(_FRONTEND_DIR, "welcome.html"))
 
 @app.get("/welcome")
 async def welcome_page():
-    """Alias untuk halaman welcome"""
     return FileResponse(os.path.join(_FRONTEND_DIR, "welcome.html"))
 
 @app.get("/chat")
 async def chat_page():
-    """Halaman chat utama (setelah isi identitas)"""
     return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
 
 # ============================================================
 # ===== API ROUTES ===========================================
 # ============================================================
 
-# Lazy load model
-_model_instance = None
-_last_active_model = None
+# ✅ Satu instance orchestrator (lazy load, dipakai semua request)
+_rag_instance = None
 
-def get_active_model():
-    """Lazy load model instance berdasarkan settings.active_model"""
-    global _model_instance, _last_active_model
-    current_model = settings.active_model
-    if _model_instance is None or _last_active_model != current_model:
-        print(f"🔄 Loading model: {current_model}")
-        _model_instance = get_model(current_model)
-        _last_active_model = current_model
-    return _model_instance
+def get_rag_model() -> RAGUnifiedModel:
+    global _rag_instance
+    if _rag_instance is None:
+        print("🔄 Loading RAGUnifiedModel...")
+        _rag_instance = RAGUnifiedModel()
+    return _rag_instance
 
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
-        "model": get_active_model().get_model_info(),
+        "model": get_rag_model().get_model_info(),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -103,25 +97,25 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
     try:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Pertanyaan tidak boleh kosong")
-        
-        target_model = request.model or settings.active_model
-        if target_model not in ["gemini", "openai", "rag", "rag_dynamic"]:
-            target_model = "gemini"
-            
-        model = get_model(target_model)
+
+        # ✅ Tidak ada pilihan model: semua lewat RAGUnifiedModel
+        model = get_rag_model()
         response = await model.generate_response(
             question=request.question,
             chat_history=request.chat_history,
             context=request.context
         )
-        
+
         elapsed = time.time() - start_time
-        print(f"✅ [{response.success}] {request.question[:50]}... ({elapsed:.2f}s) [Model: {target_model}]")
-        
+        model_used = response.meta.get("model_used", "unknown")
+        fallback = " (FALLBACK)" if response.meta.get("fallback") else ""
+        print(f"✅ [{response.success}] {request.question[:50]}... ({elapsed:.2f}s) [Model: {model_used}{fallback}]")
+
         return ChatResponse(
             answer=response.answer,
             sources=[s.model_dump() for s in response.sources],
-            meta={**response.meta, "requested_model": target_model},
+            table=response.table,          # ✅ baru
+            meta=response.meta,   # ✅ termasuk model_used (hanya untuk log)
             timestamp=time.strftime("%H:%M:%S"),
             success=response.success
         )
@@ -138,7 +132,6 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
 
 @app.get("/api/bps/test")
 async def test_bps_connection():
-    """Test koneksi ke BPS WebAPI"""
     import httpx
     if not settings.bps_api_key:
         return {"connected": False, "reason": "BPS_API_KEY not configured"}

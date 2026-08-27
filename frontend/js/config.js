@@ -41,25 +41,30 @@ Saya membantu Anda mengakses data statistik resmi secara cepat dan akurat.`,
   quickReplies: [
     {
       icon: "",
-      text: "PDRB Sergai",
-      query: "Berapa PDRB Kabupaten Serdang Bedagai tahun 2024?",
+      text: "Produk Domestik Regional Bruto (PDRB)",
+      query:
+        "Berapa Produk Domestik Regional Bruto Atas Dasar Harga Berlaku Menurut Lapangan Usaha (miliar rupiah) Tahun 2025?",
     },
     {
       icon: "👥",
       text: "Jumlah Penduduk",
-      query: "Berapa jumlah penduduk Sergai terbaru?",
+      query: "Berapa jumlah penduduk Kabupaten Serdang Bedagai terbaru?",
     },
     {
       icon: "📉",
       text: "Data Kemiskinan",
-      query: "Berapa persentase penduduk miskin di Sergai?",
+      query: "Berapa persentase penduduk miskin di Kabupaten Serdang Bedagai?",
     },
     {
-      icon: "📖",
-      text: "Unduh Publikasi",
-      query: "Di mana saya bisa download Sergai Dalam Angka?",
+      icon: "",
+      text: "Indeks Pembangunan Manusia (IPM)",
+      query: "Berapa Indeks Pembangunan Manusia Kabupaten Serdang Bedagai?",
     },
-    { icon: "❓", text: "Bantuan", query: "Fitur apa saja yang kamu miliki?" },
+    {
+      icon: "👥",
+      text: "Angkatan Kerja",
+      query: "Berapa jumlah angkatan kerja di Kabupaten Serdang Bedagai?",
+    },
   ],
 
   // 🛡️ Fallback Messages

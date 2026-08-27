@@ -17,7 +17,6 @@ from typing import Optional, List, Dict
 import time
 
 from config import settings
-from models import ModelResponse
 from models.rag_unified import RAGUnifiedModel
 
 # Initialize FastAPI app

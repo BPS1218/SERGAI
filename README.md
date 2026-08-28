@@ -194,28 +194,6 @@ Jangan upload `.env` ke repository.
 
 ---
 
-## Teknologi
-
-**Backend**
-
-- Python
-- FastAPI
-- Gemini
-- OpenAI
-- RAG
-
-**Frontend**
-
-- HTML
-- CSS
-- JavaScript
-
-**Deployment**
-
-- Railway
-
----
-
 ## BPS Kabupaten Serdang Bedagai
 
 SERGAI dikembangkan untuk mendukung peningkatan aksesibilitas informasi statistik di BPS Kabupaten Serdang Bedagai.

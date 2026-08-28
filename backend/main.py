@@ -17,6 +17,7 @@ from typing import Optional, List, Dict
 import time
 
 from config import settings
+from models import ModelResponse
 from models.rag_unified import RAGUnifiedModel
 
 # Initialize FastAPI app
@@ -41,6 +42,10 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = "anonymous"
     chat_history: Optional[List[Dict]] = Field(default_factory=list)
     context: Optional[Dict] = None
+
+    # ID kandidat yang dipilih user saat backend mengembalikan
+    # meta.type == "candidate_selection"
+    selected_candidate_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     answer: str
@@ -99,10 +104,17 @@ async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks)
 
         # ✅ Tidak ada pilihan model: semua lewat RAGUnifiedModel
         model = get_rag_model()
+
+        # Gabungkan context biasa dengan kandidat yang dipilih user.
+        # rag_unified.py membaca selected_candidate_id dari context.
+        request_context = dict(request.context or {})
+        if request.selected_candidate_id:
+            request_context["selected_candidate_id"] = request.selected_candidate_id
+
         response = await model.generate_response(
             question=request.question,
             chat_history=request.chat_history,
-            context=request.context
+            context=request_context
         )
 
         elapsed = time.time() - start_time

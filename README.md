@@ -16,7 +16,7 @@
 
 ## Tentang SERGAI
 
-**SERGAI** adalah asisten virtual berbasis AI yang dikembangkan untuk membantu pengguna memperoleh informasi statistik Kabupaten Serdang Bedagai secara cepat, mudah, dan responsif.
+**SERGAI** adalah asisten virtual berbasis AI yang dibangun untuk membantu pengguna memperoleh informasi statistik Kabupaten Serdang Bedagai secara cepat, mudah, dan responsif.
 
 SERGAI menggunakan pendekatan **Retrieval-Augmented Generation (RAG)** dengan menggabungkan proses pencarian data, knowledge base, dan Large Language Model (LLM).
 
@@ -27,10 +27,9 @@ SERGAI menggunakan pendekatan **Retrieval-Augmented Generation (RAG)** dengan me
 - Chatbot informasi statistik
 - Pencarian data berdasarkan keyword
 - Retrieval-Augmented Generation
-- Integrasi Gemini dan OpenAI
+- Integrasi LLM
 - Penyajian tabel dan sumber data
-- Login Google
-- Tampilan responsif untuk desktop dan mobile
+- Tampilan responsif
 
 ---
 
@@ -68,7 +67,6 @@ SERGAI/
 ├── README.md
 ├── .env.example
 ├── .gitignore
-├── railway.toml
 ├── requirements.txt
 │
 ├── backend/
@@ -193,20 +191,6 @@ OPENAI_API_KEY=your_key
 ```
 
 Jangan upload `.env` ke repository.
-
----
-
-## Planned Improvements
-
-Pengembangan berikutnya akan difokuskan pada:
-
-- memperbaiki data yang masih ter-skip;
-- memperbaiki link data prioritas;
-- menambahkan pilihan ketika banyak keyword match;
-- menambahkan pencarian publikasi berdasarkan keyword;
-- menstandardisasi output tabel;
-- memperbaiki tampilan tabel;
-- refactor CSS agar tidak saling menimpa.
 
 ---
 

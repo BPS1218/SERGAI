@@ -1531,3 +1531,217 @@ button,
 .message.bot .bubble:has(.table-card-inner) {
   max-width: 95%;
 }
+
+@media (max-width: 768px) {
+  .chat-box {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .message {
+    max-width: 100% !important;
+    min-width: 0;
+  }
+
+  .message-content {
+    min-width: 0 !important;
+    max-width: calc(100vw - 70px);
+  }
+
+  .bubble {
+    max-width: 100% !important;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .bubble a,
+  .msg-link {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .table-card,
+  .table-card-inner {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .data-table {
+    width: max-content;
+    min-width: 100%;
+  }
+}
+
+/* =====================================================
+   FINAL MOBILE CHAT FIX
+   ===================================================== */
+@media (max-width: 480px) {
+  body {
+    width: 100%;
+    height: 100dvh;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .chat-container {
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  /* ================= CHAT AREA ================= */
+
+  .chat-box {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+
+    padding: 14px 10px 12px;
+
+    overflow-x: hidden;
+  }
+
+  /* Bot memakai lebar area chat yang tersedia */
+  .message.bot {
+    width: 100%;
+    max-width: 100% !important;
+    min-width: 0;
+
+    gap: 8px;
+  }
+
+  .message.bot .message-avatar {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+  }
+
+  /* KUNCI agar bubble tidak keluar layar */
+  .message.bot .message-content {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  .message.bot .bubble {
+    width: 100%;
+    max-width: 100% !important;
+    min-width: 0;
+
+    padding: 12px 14px;
+
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  /* Pesan user tetap lebih kecil */
+  .message.user {
+    max-width: 88% !important;
+  }
+
+  .message.user .message-content {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* ================= TABEL ================= */
+
+  .bubble .table-card-inner {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+
+    margin: 12px 0;
+    padding: 10px;
+
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* Judul dan tombol tidak dipaksa sejajar */
+  .table-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .table-title {
+    width: 100%;
+    min-width: 0;
+
+    font-size: 11.5px;
+    line-height: 1.45;
+  }
+
+  .table-download-btn {
+    width: 100%;
+
+    padding: 9px 12px;
+    font-size: 10.5px;
+
+    text-align: center;
+  }
+
+  /* Tabel boleh digeser horizontal,
+     tetapi card-nya tidak keluar layar */
+  .table-scroll {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+
+    overflow-x: auto !important;
+    overflow-y: auto;
+
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+
+  .data-table {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 6px 8px;
+    font-size: 10.5px;
+  }
+}
+
+/* ===== RATA KANAN KIRI JAWABAN BOT ===== */
+.message.bot .bubble {
+  text-align: justify;
+  text-justify: inter-word;
+}
+
+/* Isi tabel tetap rata kiri */
+.message.bot .bubble .table-card-inner,
+.message.bot .bubble .table-title,
+.message.bot .bubble .table-meta,
+.message.bot .bubble .data-table th,
+.message.bot .bubble .data-table td {
+  text-align: left;
+}
+
+/* Tombol tetap tengah */
+.message.bot .bubble .table-download-btn {
+  text-align: center;
+}

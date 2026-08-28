@@ -295,44 +295,16 @@ export function formatBotResponse(apiResult, originalQuestion) {
 
 // ========== UTILITIES: Model Selection Persistence ==========
 
-/**
- * Simpan pilihan model ke localStorage
- */
-export function saveModelPreference(modelName) {
-  if (
-    modelName &&
-    ["gemini", "openai", "rag", "rag_dynamic"].includes(modelName)
-  ) {
-    localStorage.setItem("sergai_model", modelName);
-  }
-}
 
 /**
  * Load pilihan model dari localStorage
  */
-export function loadModelPreference() {
-  return localStorage.getItem("sergai_model") || "gemini";
-}
+
 
 /**
  * Inisialisasi dropdown model saat page load
  * (Panggil di js/app.js saat DOM ready)
  */
-export function initModelSelector() {
-  const select = document.getElementById("model-select");
-  if (select) {
-    const saved = loadModelPreference();
-    select.value = saved;
-
-    // Simpan saat user ganti pilihan
-    select.addEventListener("change", (e) => {
-      saveModelPreference(e.target.value);
-      console.log(`🔄 Model changed to: ${e.target.value}`);
-    });
-
-    console.log(`✅ Model selector initialized: ${saved}`);
-  }
-}
 
 // ... kode existing di api.js ...
 

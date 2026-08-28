@@ -356,14 +356,8 @@ function createMessageElement(text, sender, meta = {}, table = null) {
   if (sender === "bot" && table) {
     const tableHtml = buildTableHtml(table);
 
-    // Cari posisi penyisipan: sebelum 📊 Data, atau sebelum 💡 Catatan, atau di akhir
-    const insertMarkers = [
-      "• Definisi:",
-      "Definisi:",
-      "💡 Catatan:",
-      "📊 Data:",
-      "📖 Sumber:",
-    ];
+    // Cari posisi penyisipan: sebelum 💡 Catatan
+    const insertMarkers = ["💡 Catatan:"];
     let insertPos = -1;
     for (const marker of insertMarkers) {
       const idx = bubbleContent.indexOf(marker);

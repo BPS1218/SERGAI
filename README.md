@@ -2,8 +2,6 @@
   <img src="frontend/assets/logo-sergAI.png" alt="SERGAI Logo" width="220">
 </p>
 
-<h1 align="center">SERGAI</h1>
-
 <p align="center">
   <strong>Smart Engagement for Responsive Government Assistant Intelligence</strong>
 </p>

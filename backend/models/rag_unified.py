@@ -14,14 +14,23 @@ Alur pencarian:
 7. Jika user minta tabel → kirim data terstruktur untuk download Excel
 """
 import re
+import asyncio
 import time
 import hashlib
 from difflib import SequenceMatcher
 from typing import Optional, List, Dict, Tuple
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 from io import StringIO
 import httpx
 import pandas as pd
+
+try:
+    from lingua import Language, LanguageDetectorBuilder
+    LINGUA_AVAILABLE = True
+except ImportError:
+    Language = None
+    LanguageDetectorBuilder = None
+    LINGUA_AVAILABLE = False
 
 from config import settings
 from .base import BaseModel, ModelResponse, Source
@@ -64,8 +73,28 @@ class RAGUnifiedModel(BaseModel):
         self.candidate_min_coverage = 0.75
 
         # Similarity judul untuk dianggap data yang sama / sangat mirip
-        self.title_similarity_threshold = 0.88 
-    
+        self.title_similarity_threshold = 0.88
+        # Detector bahasa khusus header tabel prioritas.
+        self._header_language_detector = None
+
+        if LINGUA_AVAILABLE:
+            try:
+                self._header_language_detector = (
+                    LanguageDetectorBuilder
+                    .from_languages(
+                        Language.INDONESIAN,
+                        Language.ENGLISH,
+                    )
+                    .build()
+                )
+            except Exception as e:
+                print(
+                    "⚠️ Lingua language detector tidak aktif:",
+                    type(e).__name__,
+                    e,
+                )
+
+
     def get_model_info(self) -> Dict:
         return {
             "name": "RAG Unified",
@@ -79,7 +108,8 @@ class RAGUnifiedModel(BaseModel):
                 "year_fallback",
                 "definisi_interpretasi",
                 "rekap_fallback",
-                "structured_table_export"
+                "structured_table_export",
+                "publication_search"
             ]
         }
 
@@ -299,6 +329,693 @@ class RAGUnifiedModel(BaseModel):
             "exact": exact,
         }
 
+
+    # ============================================================
+    # ===== PUBLICATION SEARCH ===================================
+    # ============================================================
+
+    def _is_publication_intent(self, question: str) -> bool:
+        """
+        Jalur publikasi hanya aktif jika pengguna secara eksplisit
+        menyebut 'publikasi' / 'publication'.
+
+        Ini sengaja dibuat ketat agar pertanyaan data seperti
+        'jumlah penduduk 2025' tetap masuk ke RAG data biasa.
+        """
+        q = self._normalize_search_text(question)
+
+        return bool(
+            re.search(
+                r"\b(publikasi|publication|publications)\b",
+                q,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _extract_publication_keyword(self, question: str) -> str:
+        """
+        Ambil topik inti dari pertanyaan publikasi.
+
+        Contoh:
+        'tolong carikan publikasi tentang penduduk'
+        -> 'penduduk'
+
+        'ada publikasi kecamatan silinda?'
+        -> 'kecamatan silinda'
+        """
+        q = self._normalize_search_text(question)
+
+        # Kata yang hanya menunjukkan intent/permintaan,
+        # bukan topik yang perlu dikirim ke WebAPI.
+        stopwords = {
+            "publikasi",
+            "publication",
+            "publications",
+            "tolong",
+            "carikan",
+            "cari",
+            "lihat",
+            "tampilkan",
+            "ada",
+            "apakah",
+            "tentang",
+            "mengenai",
+            "terkait",
+            "untuk",
+            "yang",
+            "dari",
+            "di",
+            "bps",
+            "serdang",
+            "bedagai",
+            "kabupaten",
+            "pdf",
+            "download",
+            "unduh",
+            "link",
+            "buku"
+        }
+
+        tokens = []
+
+        for token in q.split():
+            if token in stopwords:
+                continue
+
+            if len(token) >= 2:
+                tokens.append(token)
+
+        return " ".join(tokens).strip()
+
+    async def _fetch_publication_page(
+        self,
+        client: httpx.AsyncClient,
+        keyword: str,
+        page: int,
+    ) -> Tuple[Optional[Dict], List[Dict]]:
+        """
+        Ambil satu halaman publication WebAPI BPS.
+
+        Response BPS:
+        data[0] = metadata pagination
+        data[1] = list publikasi
+        """
+        if not self.api_key:
+            return None, []
+
+        encoded_keyword = quote(
+            keyword,
+            safe="",
+        )
+
+        encoded_key = quote(
+            self.api_key,
+            safe="",
+        )
+
+        if page <= 1:
+            url = (
+                f"{self.base_url}/list/model/publication/"
+                f"lang/ind/domain/{self.domain_id}/"
+                f"keyword/{encoded_keyword}/"
+                f"key/{encoded_key}/"
+            )
+        else:
+            url = (
+                f"{self.base_url}/list/model/publication/"
+                f"lang/ind/domain/{self.domain_id}/"
+                f"page/{page}/"
+                f"keyword/{encoded_keyword}/"
+                f"key/{encoded_key}/"
+            )
+
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+
+            payload = response.json()
+
+            if (
+                not isinstance(payload, dict)
+                or str(payload.get("status", "")).upper() != "OK"
+            ):
+                return None, []
+
+            data = payload.get("data")
+
+            if (
+                not isinstance(data, list)
+                or len(data) < 2
+            ):
+                return None, []
+
+            pagination = (
+                data[0]
+                if isinstance(data[0], dict)
+                else {}
+            )
+
+            publications = (
+                data[1]
+                if isinstance(data[1], list)
+                else []
+            )
+
+            return pagination, publications
+
+        except Exception as e:
+            print(
+                f"⚠️ Publication page {page} error:",
+                type(e).__name__,
+                e,
+            )
+            return None, []
+
+    def _publication_year(self, publication: Dict) -> int:
+        """
+        Tahun untuk tie-break ranking.
+        Prioritas title -> rl_date.
+        """
+        title = str(
+            publication.get("title", "")
+        )
+
+        years = re.findall(
+            r"\b(20\d{2})\b",
+            title,
+        )
+
+        if years:
+            try:
+                return max(
+                    int(year)
+                    for year in years
+                )
+            except Exception:
+                pass
+
+        release_date = str(
+            publication.get("rl_date", "")
+        )
+
+        match = re.match(
+            r"^(20\d{2})",
+            release_date,
+        )
+
+        if match:
+            try:
+                return int(
+                    match.group(1)
+                )
+            except Exception:
+                pass
+
+        return 0
+
+    def _publication_score(
+        self,
+        publication: Dict,
+        keyword: str,
+    ) -> float:
+        """
+        Ranking publikasi:
+        - judul mendapat bobot terbesar
+        - abstrak sebagai pendukung
+        - publikasi terbaru sebagai tie-break ringan
+        """
+        keyword_norm = self._normalize_search_text(
+            keyword
+        )
+
+        title_norm = self._normalize_search_text(
+            publication.get("title", "")
+        )
+
+        abstract_norm = self._normalize_search_text(
+            publication.get("abstract", "")
+        )
+
+        query_tokens = [
+            token
+            for token in keyword_norm.split()
+            if len(token) >= 2
+        ]
+
+        if not query_tokens:
+            return 0.0
+
+        score = 0.0
+
+        # Phrase lengkap pada judul adalah sinyal terkuat.
+        if (
+            keyword_norm
+            and keyword_norm == title_norm
+        ):
+            score += 140
+
+        elif (
+            keyword_norm
+            and keyword_norm in title_norm
+        ):
+            score += 90
+
+        elif (
+            keyword_norm
+            and keyword_norm in abstract_norm
+        ):
+            score += 20
+
+        matched_title = 0
+        matched_abstract = 0
+
+        for token in query_tokens:
+            if token in title_norm:
+                score += 24
+                matched_title += 1
+
+            elif token in abstract_norm:
+                score += 6
+                matched_abstract += 1
+
+        title_coverage = (
+            matched_title / len(query_tokens)
+        )
+
+        all_coverage = (
+            (matched_title + matched_abstract)
+            / len(query_tokens)
+        )
+
+        if title_coverage == 1:
+            score += 45
+        elif title_coverage >= 0.75:
+            score += 25
+        elif title_coverage >= 0.5:
+            score += 12
+
+        if all_coverage == 1:
+            score += 10
+
+        # Tahun hanya bonus kecil; relevansi tetap utama.
+        year = self._publication_year(
+            publication
+        )
+
+        if year:
+            score += max(
+                0,
+                year - 2020
+            ) * 0.4
+
+        return round(
+            score,
+            3,
+        )
+
+    def _clean_publication_item(
+        self,
+        publication: Dict,
+    ) -> Optional[Dict]:
+        """
+        Hanya field yang dibutuhkan frontend.
+        """
+        title = re.sub(
+            r"\s+",
+            " ",
+            str(
+                publication.get(
+                    "title",
+                    ""
+                )
+            )
+        ).strip()
+
+        abstract = re.sub(
+            r"\s+",
+            " ",
+            str(
+                publication.get(
+                    "abstract",
+                    ""
+                )
+            )
+        ).strip()
+
+        pdf = str(
+            publication.get(
+                "pdf",
+                ""
+            )
+        ).strip()
+
+        cover = str(
+            publication.get(
+                "cover",
+                ""
+            )
+        ).strip()
+
+        if not title:
+            return None
+
+        return {
+            "pub_id": str(
+                publication.get(
+                    "pub_id",
+                    ""
+                )
+            ).strip(),
+            "title": title,
+            "abstract": abstract,
+            "pdf": pdf,
+            "cover": cover,
+        }
+
+    async def _search_publications(
+        self,
+        keyword: str,
+        limit: int = 5,
+    ) -> Dict:
+        """
+        Ambil page 1, baca jumlah pages, lalu ambil semua page sisanya.
+        Setelah digabung, deduplicate + ranking + ambil top N.
+        """
+        if not self.api_key:
+            return {
+                "ok": False,
+                "reason": "missing_api_key",
+                "keyword": keyword,
+                "total": 0,
+                "publications": [],
+            }
+
+        timeout = httpx.Timeout(
+            25.0,
+            connect=10.0,
+        )
+
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+        ) as client:
+
+            pagination, first_items = (
+                await self._fetch_publication_page(
+                    client,
+                    keyword,
+                    1,
+                )
+            )
+
+            if pagination is None:
+                return {
+                    "ok": False,
+                    "reason": "api_error",
+                    "keyword": keyword,
+                    "total": 0,
+                    "publications": [],
+                }
+
+            try:
+                pages = max(
+                    1,
+                    int(
+                        pagination.get(
+                            "pages",
+                            1
+                        )
+                    ),
+                )
+            except Exception:
+                pages = 1
+
+            all_items = list(
+                first_items
+            )
+
+            # Fetch page 2..N secara paralel.
+            if pages > 1:
+                tasks = [
+                    self._fetch_publication_page(
+                        client,
+                        keyword,
+                        page,
+                    )
+                    for page in range(
+                        2,
+                        pages + 1
+                    )
+                ]
+
+                results = await asyncio.gather(
+                    *tasks,
+                    return_exceptions=True,
+                )
+
+                for result in results:
+                    if isinstance(
+                        result,
+                        Exception
+                    ):
+                        continue
+
+                    _, page_items = result
+
+                    if page_items:
+                        all_items.extend(
+                            page_items
+                        )
+
+        # ==========================================
+        # DEDUPLICATE
+        # ==========================================
+        unique = {}
+
+        for item in all_items:
+            if not isinstance(
+                item,
+                dict
+            ):
+                continue
+
+            cleaned = (
+                self._clean_publication_item(
+                    item
+                )
+            )
+
+            if not cleaned:
+                continue
+
+            dedupe_key = (
+                cleaned.get("pub_id")
+                or cleaned.get("pdf")
+                or self._normalize_search_text(
+                    cleaned.get(
+                        "title",
+                        ""
+                    )
+                )
+            )
+
+            if not dedupe_key:
+                continue
+
+            if dedupe_key not in unique:
+                cleaned["_score"] = (
+                    self._publication_score(
+                        item,
+                        keyword,
+                    )
+                )
+
+                cleaned["_year"] = (
+                    self._publication_year(
+                        item
+                    )
+                )
+
+                unique[
+                    dedupe_key
+                ] = cleaned
+
+        ranked = sorted(
+            unique.values(),
+            key=lambda item: (
+                item.get(
+                    "_score",
+                    0
+                ),
+                item.get(
+                    "_year",
+                    0
+                ),
+                item.get(
+                    "title",
+                    ""
+                ),
+            ),
+            reverse=True,
+        )
+
+        selected = []
+
+        for item in ranked[:limit]:
+            item = dict(item)
+
+            item.pop(
+                "_score",
+                None,
+            )
+
+            item.pop(
+                "_year",
+                None,
+            )
+
+            selected.append(
+                item
+            )
+
+        try:
+            total = int(
+                pagination.get(
+                    "total",
+                    len(unique)
+                )
+            )
+        except Exception:
+            total = len(unique)
+
+        return {
+            "ok": True,
+            "keyword": keyword,
+            "pages": pages,
+            "total": total,
+            "matched_total": len(unique),
+            "publications": selected,
+        }
+
+    async def _handle_publication_search(
+        self,
+        question: str,
+    ) -> ModelResponse:
+        """
+        Response khusus pencarian publikasi.
+        Tidak melewati LLM agar judul/link tidak terarang.
+        """
+        keyword = (
+            self._extract_publication_keyword(
+                question
+            )
+        )
+
+        if not keyword:
+            return ModelResponse(
+                answer=(
+                    "Silakan sebutkan topik publikasi yang ingin dicari, "
+                    "misalnya **publikasi penduduk**, "
+                    "**publikasi kemiskinan**, atau "
+                    "**publikasi Kecamatan Silinda**."
+                ),
+                sources=[],
+                meta={
+                    "provider": "rag_unified",
+                    "type": "publication_keyword_required",
+                    "model_used": "none",
+                },
+                success=True,
+            )
+
+        result = await self._search_publications(
+            keyword=keyword,
+            limit=5,
+        )
+
+        if not result.get("ok"):
+            if result.get("reason") == "missing_api_key":
+                message = (
+                    "Pencarian publikasi belum dapat digunakan karena "
+                    "BPS_API_KEY belum dikonfigurasi."
+                )
+            else:
+                message = (
+                    "Maaf, pencarian publikasi sedang tidak dapat diakses. "
+                    "Silakan coba kembali beberapa saat lagi."
+                )
+
+            return ModelResponse(
+                answer=message,
+                sources=[],
+                meta={
+                    "provider": "rag_unified",
+                    "type": "publication_error",
+                    "model_used": "none",
+                },
+                success=True,
+            )
+
+        publications = result.get(
+            "publications",
+            []
+        )
+
+        if not publications:
+            return ModelResponse(
+                answer=(
+                    f"Saya belum menemukan publikasi yang sesuai dengan "
+                    f"kata kunci **{keyword}**."
+                ),
+                sources=[],
+                meta={
+                    "provider": "rag_unified",
+                    "type": "publication_not_found",
+                    "keyword": keyword,
+                    "model_used": "none",
+                },
+                success=True,
+            )
+
+        shown = len(
+            publications
+        )
+
+        total = result.get(
+            "matched_total",
+            result.get(
+                "total",
+                shown
+            )
+        )
+
+        answer = (
+            f"Saya menemukan beberapa publikasi yang relevan untuk "
+            f"kata kunci **{keyword}**. "
+            f"Berikut {shown} publikasi yang paling sesuai."
+        )
+
+        return ModelResponse(
+            answer=answer,
+            sources=[],
+            table=None,
+            meta={
+                "provider": "rag_unified",
+                "type": "publication_results",
+                "model_used": "bps_webapi",
+                "keyword": keyword,
+                "publication_count": shown,
+                "publication_total": total,
+                "publication_pages": result.get(
+                    "pages",
+                    1
+                ),
+                "publications": publications,
+            },
+            success=True,
+        )
+
+
 # ============================================================
 # ===== MAIN ENTRY POINT =====
 # ============================================================
@@ -318,6 +1035,15 @@ class RAGUnifiedModel(BaseModel):
                 "semua data", "daftar", "excel", "unduh", "download", "csv"
             ]
             include_table = any(kw in q_lower for kw in table_keywords)
+
+
+            # ===== 1. PUBLICATION INTENT =====
+            # Hanya aktif jika pengguna secara eksplisit mengetik
+            # "publikasi" / "publication".
+            if self._is_publication_intent(question):
+                return await self._handle_publication_search(
+                    question
+                )
             
             # ===== 1a. PRE-CHECK: Conversational =====
             conversational_keywords = [
@@ -1369,103 +2095,67 @@ class RAGUnifiedModel(BaseModel):
         title: str = "",
         sheet_name: str = "",
     ) -> Optional[str]:
-
         years = []
 
-        # ==========================================
-        # Judul
-        # ==========================================
-
+        years.extend(self._extract_years_from_text(title))
+        years.extend(self._extract_years_from_text(sheet_name))
         years.extend(
             self._extract_years_from_text(
-                title
+                df.attrs.get("sheet_title", "")
+            )
+        )
+        years.extend(
+            self._extract_years_from_text(
+                df.attrs.get("source_note", "")
             )
         )
 
-        # ==========================================
-        # Nama sheet
-        # ==========================================
-
-        years.extend(
-            self._extract_years_from_text(
-                sheet_name
-            )
-        )
-
-        # ==========================================
-        # Nama kolom
-        # ==========================================
+        for year in df.attrs.get("raw_years", []):
+            try:
+                years.append(int(year))
+            except (TypeError, ValueError):
+                pass
 
         for column in df.columns:
-
-            years.extend(
-                self._extract_years_from_text(
-                    str(column)
-                )
-            )
-
-        # ==========================================
-        # Isi data
-        # Batasi agar tidak scan berlebihan
-        # ==========================================
+            years.extend(self._extract_years_from_text(str(column)))
 
         sample = df.head(200)
 
         for column in sample.columns:
+            for value in sample[column].dropna().astype(str).tolist():
+                years.extend(self._extract_years_from_text(value))
 
-            values = (
-                sample[column]
-                .dropna()
-                .astype(str)
-                .tolist()
-            )
-
-            for value in values:
-
-                years.extend(
-                    self._extract_years_from_text(
-                        value
-                    )
-                )
-
-        if not years:
-            return None
-
-        return str(max(years))
+        return str(max(years)) if years else None
 
     def _df_contains_year(
         self,
         df: pd.DataFrame,
         year: str,
     ) -> bool:
-
         if not year:
             return True
 
-        # kolom
-        for column in df.columns:
+        year = str(year)
 
-            if (
-                year
-                in str(column)
-            ):
+        metadata_text = " ".join([
+            str(df.attrs.get("sheet_title", "")),
+            str(df.attrs.get("source_note", "")),
+            " ".join(str(y) for y in df.attrs.get("raw_years", [])),
+        ])
+
+        if year in metadata_text:
+            return True
+
+        for column in df.columns:
+            if year in str(column):
                 return True
 
-        # data
         sample = df.head(500)
 
         for column in sample.columns:
+            series = sample[column].dropna().astype(str)
 
-            series = (
-                sample[column]
-                .dropna()
-                .astype(str)
-            )
-
-            if series.str.contains(
-                year,
-                regex=False
-            ).any():
+            if series.str.contains(year, regex=False).any():
                 return True
 
         return False
@@ -1939,21 +2629,934 @@ class RAGUnifiedModel(BaseModel):
             return best_match
         return None
     
+    # ============================================================
+    # ===== NORMALISASI SHEET PRIORITAS ==========================
+    # ============================================================
+
+    def _priority_cell_text(
+        self,
+        value,
+        preserve_lines: bool = False,
+    ) -> str:
+        """Bersihkan isi sel; line break dapat dipertahankan untuk header bilingual."""
+        if value is None:
+            return ""
+
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+
+        value = str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+        if value.lower() in {"nan", "none", "null"}:
+            return ""
+
+        if preserve_lines:
+            lines = []
+            for line in value.split("\n"):
+                line = re.sub(r"[ \t]+", " ", line).strip()
+                if line:
+                    lines.append(line)
+            return "\n".join(lines)
+
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _is_priority_numbering_cell(self, value: str) -> bool:
+        """
+        Deteksi nomor kolom tabel BPS seperti (1), (2), (3).
+
+        PENTING:
+        angka data biasa seperti 6, 11, 85 TIDAK boleh dianggap
+        sebagai nomor kolom.
+        """
+        value = self._priority_cell_text(value)
+
+        return bool(
+            value
+            and re.fullmatch(
+                r"\(\s*\d{1,3}\s*\)",
+                value
+            )
+        )
+
+    def _is_priority_numbering_row(self, row_values: List[str]) -> bool:
+        values = [self._priority_cell_text(v) for v in row_values]
+        nonempty = [v for v in values if v]
+
+        return bool(
+            nonempty
+            and all(self._is_priority_numbering_cell(v) for v in nonempty)
+        )
+
+    def _is_priority_footer_row(self, row_values: List[str]) -> bool:
+        values = [self._priority_cell_text(v) for v in row_values]
+        nonempty = [v for v in values if v]
+
+        if not nonempty:
+            return False
+
+        return bool(
+            re.match(
+                r"^(sumber|source|catatan|note|keterangan)\s*:",
+                nonempty[0].lower()
+            )
+        )
+
+    def _priority_numeric_like(self, value: str) -> bool:
+        value = self._priority_cell_text(value)
+
+        if not value or self._is_priority_numbering_cell(value):
+            return False
+
+        cleaned = value.replace(" ", "").replace("%", "")
+
+        return bool(
+            re.fullmatch(
+                r"[-+]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?",
+                cleaned
+            )
+        )
+
+    def _looks_like_priority_data_row(self, row_values: List[str]) -> bool:
+        values = [self._priority_cell_text(v) for v in row_values]
+        nonempty = [v for v in values if v]
+
+        if len(nonempty) < 2:
+            return False
+
+        if self._is_priority_numbering_row(values):
+            return False
+
+        if self._is_priority_footer_row(values):
+            return False
+
+        numeric_after_first = sum(
+            1
+            for v in values[1:]
+            if self._priority_numeric_like(v)
+        )
+
+        return numeric_after_first >= 1
+
+    def _header_language_confidence(
+        self,
+        text: str,
+    ) -> Dict[str, float]:
+        """Confidence Bahasa Indonesia vs Inggris untuk potongan header."""
+        text = self._priority_cell_text(text)
+        result = {"id": 0.0, "en": 0.0}
+
+        if not text or self._header_language_detector is None:
+            return result
+
+        try:
+            confidence_values = self._header_language_detector.compute_language_confidence_values(text)
+            for item in confidence_values:
+                if item.language == Language.INDONESIAN:
+                    result["id"] = float(item.value)
+                elif item.language == Language.ENGLISH:
+                    result["en"] = float(item.value)
+        except Exception:
+            pass
+
+        return result
+
+    def _looks_like_english_header_piece(
+        self,
+        text: str,
+        min_confidence: float = 0.72,
+    ) -> bool:
+        conf = self._header_language_confidence(text)
+        return conf["en"] >= min_confidence and conf["en"] > conf["id"]
+
+    def _looks_like_indonesian_header_piece(
+        self,
+        text: str,
+        min_confidence: float = 0.58,
+    ) -> bool:
+        conf = self._header_language_confidence(text)
+        return conf["id"] >= min_confidence and conf["id"] >= conf["en"]
+
+    def _split_bilingual_header_by_separator(
+        self,
+        value: str,
+    ) -> Optional[str]:
+        """Tangani line break dan slash bila kanan terdeteksi sebagai Inggris."""
+        raw = self._priority_cell_text(value, preserve_lines=True)
+        if not raw:
+            return None
+
+        lines = [line.strip() for line in raw.split("\n") if line.strip()]
+        if len(lines) >= 2:
+            left = lines[0]
+            right = " ".join(lines[1:])
+            if (
+                self._looks_like_indonesian_header_piece(left)
+                and self._looks_like_english_header_piece(right)
+            ):
+                return left
+
+        slash_match = re.match(r"^\s*(.+?)\s*/\s*(.+?)\s*$", raw, flags=re.DOTALL)
+        if slash_match:
+            left = self._priority_cell_text(slash_match.group(1))
+            right = self._priority_cell_text(slash_match.group(2))
+            if (
+                left
+                and right
+                and self._looks_like_indonesian_header_piece(left)
+                and self._looks_like_english_header_piece(right)
+            ):
+                return left
+
+        return None
+
+    def _split_bilingual_header_without_separator(
+        self,
+        value: str,
+    ) -> Optional[str]:
+        """Cari titik split ID|EN terbaik pada header tanpa separator."""
+        normalized = self._priority_cell_text(value)
+        tokens = normalized.split()
+
+        if len(tokens) < 2:
+            return None
+
+        best = None
+
+        for split_index in range(1, len(tokens)):
+            left = " ".join(tokens[:split_index])
+            right = " ".join(tokens[split_index:])
+            left_conf = self._header_language_confidence(left)
+            right_conf = self._header_language_confidence(right)
+
+            if not (
+                left_conf["id"] >= 0.58
+                and left_conf["id"] >= left_conf["en"]
+                and right_conf["en"] >= 0.76
+                and right_conf["en"] > right_conf["id"]
+            ):
+                continue
+
+            score = (
+                left_conf["id"]
+                + right_conf["en"]
+                - left_conf["en"]
+                - right_conf["id"]
+            )
+
+            if best is None or score > best["score"]:
+                best = {"left": left, "score": score}
+
+        return best["left"] if best else None
+
+    def _clean_bilingual_parentheses(
+        self,
+        value: str,
+    ) -> str:
+        """Hapus (English translation), tetapi pertahankan satuan seperti (jiwa), (%), (km²)."""
+        value = self._priority_cell_text(value)
+        match = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", value)
+        if not match:
+            return value
+
+        outside = match.group(1).strip()
+        inside = match.group(2).strip()
+
+        if (
+            outside
+            and inside
+            and self._looks_like_indonesian_header_piece(outside)
+            and self._looks_like_english_header_piece(inside, min_confidence=0.78)
+        ):
+            return outside
+
+        return value
+
+    def _clean_priority_header_label(
+        self,
+        value: str,
+        column_index: int,
+    ) -> str:
+        """
+        Bersihkan Bahasa Inggris dari HEADER tabel prioritas secara adaptif.
+        Jika tidak yakin, teks asli dipertahankan.
+        """
+        raw = self._priority_cell_text(value, preserve_lines=True)
+        if not raw:
+            return f"Kolom {column_index + 1}"
+
+        separated = self._split_bilingual_header_by_separator(raw)
+
+        if separated:
+            cleaned = separated
+        else:
+            cleaned = self._priority_cell_text(raw)
+            cleaned = self._clean_bilingual_parentheses(cleaned)
+            split_result = self._split_bilingual_header_without_separator(cleaned)
+            if split_result:
+                cleaned = split_result
+
+        # Safety-net konservatif bila Lingua belum tersedia atau tidak yakin.
+        # Tidak menjadi mekanisme utama.
+        conservative_patterns = [
+            r"\s*/\s*Teachers?$",
+            r"\s*/\s*Schools?$",
+            r"\s*/\s*Students?$",
+            r"\s*/\s*Subdistrict$",
+            r"\s*/\s*District$",
+            r"\s*/\s*Sex$",
+            r"\s*/\s*Gender$",
+            r"\s*/\s*Year$",
+            r"\s*/\s*Public$",
+            r"\s*/\s*Private$",
+            r"\s*/\s*Male$",
+            r"\s*/\s*Female$",
+        ]
+
+        for pattern in conservative_patterns:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+
+        cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
+        return cleaned or f"Kolom {column_index + 1}"
+
+    def _expand_merged_priority_header_row(
+        self,
+        row_values: List[str],
+    ) -> List[str]:
+        """
+        Google Sheets mengekspor merged cells hanya pada sel pertama.
+
+        Contoh:
+        ["Kecamatan", "Sekolah", "", "", "Guru", "", "", "Murid", "", ""]
+
+        diubah menjadi:
+        ["Kecamatan", "Sekolah", "Sekolah", "Sekolah",
+         "Guru", "Guru", "Guru", "Murid", "Murid", "Murid"]
+        """
+        values = [
+            self._priority_cell_text(v)
+            for v in row_values
+        ]
+
+        expanded = []
+        current = ""
+
+        for value in values:
+            if value:
+                current = value
+                expanded.append(value)
+            else:
+                expanded.append(current)
+
+        return expanded
+
+    def _build_priority_headers(
+        self,
+        header_rows: List[List[str]],
+        column_count: int,
+    ) -> List[str]:
+        """
+        Bentuk header akhir dari header bertingkat.
+
+        Contoh:
+        Sekolah / Schools
+            Negeri / Public
+            Swasta / Private
+            Jumlah / Total
+
+        menjadi:
+        Sekolah - Negeri
+        Sekolah - Swasta
+        Sekolah - Jumlah
+        """
+        if not header_rows:
+            return [
+                f"Kolom {i + 1}"
+                for i in range(column_count)
+            ]
+
+        # Parent/group header di-expand mengikuti merged cell.
+        expanded_rows = [
+            self._expand_merged_priority_header_row(row)
+            for row in header_rows
+        ]
+
+        headers = []
+
+        for column_index in range(column_count):
+            parts = []
+
+            for row_values in expanded_rows:
+                if column_index >= len(row_values):
+                    continue
+
+                value = self._priority_cell_text(
+                    row_values[column_index]
+                )
+
+                if not value:
+                    continue
+
+                cleaned = self._clean_priority_header_label(
+                    value,
+                    column_index
+                )
+
+                # Hindari label sama berulang.
+                if (
+                    cleaned
+                    and cleaned not in parts
+                    and not cleaned.startswith("Kolom ")
+                ):
+                    parts.append(cleaned)
+
+            if not parts:
+                header = f"Kolom {column_index + 1}"
+            elif len(parts) == 1:
+                header = parts[0]
+            else:
+                # Untuk kolom pertama biasanya parent dan child sama/bermakna sama.
+                # Untuk kolom lain, gabungkan group + subheader.
+                header = " - ".join(parts)
+
+            headers.append(header)
+
+        return self._make_unique_priority_headers(
+            headers
+        )
+
+    def _make_unique_priority_headers(
+        self,
+        headers: List[str],
+    ) -> List[str]:
+        result = []
+        counts = {}
+
+        for index, header in enumerate(headers):
+            base = self._clean_priority_header_label(header, index)
+            count = counts.get(base, 0) + 1
+            counts[base] = count
+
+            result.append(
+                base if count == 1 else f"{base} ({count})"
+            )
+
+        return result
+
+    def _build_priority_header_structure(
+        self,
+        header_rows: List[List[str]],
+        column_count: int,
+    ) -> List[List[Dict]]:
+        """Bentuk header bertingkat dengan colspan/rowspan untuk frontend."""
+        if not header_rows:
+            return []
+
+        raw_matrix = []
+
+        for row in header_rows:
+            raw_matrix.append([
+                self._priority_cell_text(
+                    row[i] if i < len(row) else ""
+                )
+                for i in range(column_count)
+            ])
+
+        expanded_matrix = [
+            self._expand_merged_priority_header_row(row)
+            for row in raw_matrix
+        ]
+
+        cleaned_matrix = []
+
+        for row in expanded_matrix:
+            cleaned_row = []
+
+            for column_index, value in enumerate(row):
+                cleaned_row.append(
+                    self._clean_priority_header_label(
+                        value,
+                        column_index
+                    )
+                    if value
+                    else ""
+                )
+
+            cleaned_matrix.append(cleaned_row)
+
+        structure = []
+        row_count = len(raw_matrix)
+        covered_until = [-1] * column_count
+
+        for row_index in range(row_count):
+            cells = []
+            column_index = 0
+
+            while column_index < column_count:
+                if covered_until[column_index] >= row_index:
+                    column_index += 1
+                    continue
+
+                label = cleaned_matrix[row_index][column_index]
+
+                if not label:
+                    column_index += 1
+                    continue
+
+                colspan = 1
+
+                while (
+                    column_index + colspan < column_count
+                    and cleaned_matrix[row_index][column_index + colspan] == label
+                    and raw_matrix[row_index][column_index + colspan] == ""
+                    and covered_until[column_index + colspan] < row_index
+                ):
+                    colspan += 1
+
+                rowspan = 1
+
+                for next_row in range(row_index + 1, row_count):
+                    if all(
+                        self._priority_cell_text(
+                            raw_matrix[next_row][c]
+                        ) == ""
+                        for c in range(
+                            column_index,
+                            column_index + colspan
+                        )
+                    ):
+                        rowspan += 1
+                    else:
+                        break
+
+                if rowspan > 1:
+                    for c in range(
+                        column_index,
+                        column_index + colspan
+                    ):
+                        covered_until[c] = (
+                            row_index + rowspan - 1
+                        )
+
+                cells.append({
+                    "label": label,
+                    "colspan": colspan,
+                    "rowspan": rowspan,
+                })
+
+                column_index += colspan
+
+            if cells:
+                structure.append(cells)
+
+        return structure
+
+    def _build_priority_header_matrix(
+        self,
+        header_rows: List[List[str]],
+        column_count: int,
+    ) -> List[List[str]]:
+        """Matrix header bersih untuk export Excel."""
+        matrix = []
+
+        for row in header_rows:
+            expanded = self._expand_merged_priority_header_row([
+                self._priority_cell_text(
+                    row[i] if i < len(row) else ""
+                )
+                for i in range(column_count)
+            ])
+
+            matrix.append([
+                self._clean_priority_header_label(
+                    value,
+                    column_index
+                )
+                if value
+                else ""
+                for column_index, value in enumerate(expanded)
+            ])
+
+        return matrix
+
+    def _detect_priority_label_columns(
+        self,
+        df: pd.DataFrame,
+    ) -> List[int]:
+        """
+        Deteksi kolom kategori/label di sisi kiri tabel.
+
+        Contoh:
+        - Jenis Kelamin
+        - Kelompok Umur
+        - Kecamatan
+
+        Kolom nilai numerik tidak ikut dianggap label.
+        """
+        if df is None or df.empty:
+            return []
+
+        label_columns = []
+
+        for column_index in range(len(df.columns)):
+            series = [
+                self._priority_cell_text(v)
+                for v in df.iloc[:, column_index].tolist()
+            ]
+
+            nonempty = [
+                v for v in series
+                if v
+            ]
+
+            if not nonempty:
+                break
+
+            numeric_count = sum(
+                1
+                for v in nonempty
+                if self._priority_numeric_like(v)
+            )
+
+            numeric_ratio = (
+                numeric_count / len(nonempty)
+            )
+
+            # Jika mayoritas isi kolom berupa angka,
+            # berarti sudah masuk area nilai.
+            if numeric_ratio >= 0.60:
+                break
+
+            label_columns.append(
+                column_index
+            )
+
+        return label_columns
+
+    def _build_priority_body_rowspans(
+        self,
+        df: pd.DataFrame,
+    ) -> List[Dict]:
+        """
+        Deteksi merged cell vertikal pada isi tabel.
+
+        Contoh CSV hasil export Google Sheet:
+
+        Laki-laki | 7-12
+                  | 13-15
+                  | 16-18
+
+        akan dikirim ke frontend sebagai rowspan=3.
+        """
+        if df is None or df.empty:
+            return []
+
+        label_columns = (
+            self._detect_priority_label_columns(
+                df
+            )
+        )
+
+        if not label_columns:
+            return []
+
+        spans = []
+
+        for column_index in label_columns:
+            row_index = 0
+
+            while row_index < len(df):
+                value = (
+                    self._priority_cell_text(
+                        df.iat[
+                            row_index,
+                            column_index
+                        ]
+                    )
+                )
+
+                if not value:
+                    row_index += 1
+                    continue
+
+                span = 1
+                next_row = row_index + 1
+
+                while next_row < len(df):
+                    next_value = (
+                        self._priority_cell_text(
+                            df.iat[
+                                next_row,
+                                column_index
+                            ]
+                        )
+                    )
+
+                    # Kategori baru ditemukan.
+                    if next_value:
+                        break
+
+                    # Jangan merge apabila baris benar-benar kosong.
+                    row_values = [
+                        self._priority_cell_text(v)
+                        for v in df.iloc[next_row].tolist()
+                    ]
+
+                    if not any(row_values):
+                        break
+
+                    span += 1
+                    next_row += 1
+
+                if span > 1:
+                    spans.append({
+                        "row": row_index,
+                        "col": column_index,
+                        "rowspan": span,
+                        "value": value,
+                    })
+
+                row_index = next_row
+
+        return spans
+
+    def _normalize_priority_sheet(
+        self,
+        raw_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Normalisasi sheet prioritas:
+        judul -> header bertingkat -> nomor kolom -> data -> sumber/catatan.
+        """
+        if raw_df is None or raw_df.empty:
+            return pd.DataFrame()
+
+        work = raw_df.copy()
+
+        def clean_raw_priority_cell(value):
+            return self._priority_cell_text(
+                value,
+                preserve_lines=True,
+            )
+
+        try:
+            work = work.map(clean_raw_priority_cell)
+        except AttributeError:
+            work = work.applymap(clean_raw_priority_cell)
+
+        # buang baris kosong
+        work = work.loc[
+            ~work.apply(
+                lambda row: all(
+                    self._priority_cell_text(v) == ""
+                    for v in row
+                ),
+                axis=1
+            )
+        ]
+
+        if work.empty:
+            return pd.DataFrame()
+
+        # buang kolom kosong
+        work = work.loc[
+            :,
+            ~work.apply(
+                lambda col: all(
+                    self._priority_cell_text(v) == ""
+                    for v in col
+                ),
+                axis=0
+            )
+        ].reset_index(drop=True)
+
+        raw_values = [
+            self._priority_cell_text(v)
+            for v in work.to_numpy().flatten().tolist()
+        ]
+        raw_text = " ".join(v for v in raw_values if v)
+        raw_years = sorted(
+            set(self._extract_years_from_text(raw_text))
+        )
+
+        # judul
+        sheet_title = ""
+        first_row = [
+            self._priority_cell_text(v)
+            for v in work.iloc[0].tolist()
+        ]
+        first_nonempty = [v for v in first_row if v]
+
+        if (
+            len(first_nonempty) == 1
+            and not self._looks_like_priority_data_row(first_row)
+        ):
+            sheet_title = first_nonempty[0]
+            work = work.iloc[1:].reset_index(drop=True)
+
+        if work.empty:
+            result = pd.DataFrame()
+            result.attrs["sheet_title"] = sheet_title
+            result.attrs["raw_years"] = raw_years
+            return result
+
+        # footer
+        source_notes = []
+        keep_rows = []
+
+        for index, row in work.iterrows():
+            row_values = [
+                self._priority_cell_text(v)
+                for v in row.tolist()
+            ]
+
+            if self._is_priority_footer_row(row_values):
+                note = " ".join(v for v in row_values if v).strip()
+                if note:
+                    source_notes.append(note)
+                continue
+
+            keep_rows.append(index)
+
+        work = work.loc[keep_rows].reset_index(drop=True)
+        source_note = " | ".join(dict.fromkeys(source_notes))
+
+        if work.empty:
+            result = pd.DataFrame()
+            result.attrs["sheet_title"] = sheet_title
+            result.attrs["source_note"] = source_note
+            result.attrs["raw_years"] = raw_years
+            return result
+
+        # cari awal data
+        data_start = None
+
+        for index in range(min(len(work), 15)):
+            row_values = [
+                self._priority_cell_text(v)
+                for v in work.iloc[index].tolist()
+            ]
+
+            if self._looks_like_priority_data_row(row_values):
+                data_start = index
+                break
+
+        if data_start is None:
+            data_start = 1 if len(work) > 1 else 0
+
+        header_area = work.iloc[:data_start].copy()
+        data_area = work.iloc[data_start:].copy()
+
+        # header
+        header_rows = []
+
+        for _, row in header_area.iterrows():
+            row_values = [
+                self._priority_cell_text(v)
+                for v in row.tolist()
+            ]
+
+            if not self._is_priority_numbering_row(row_values):
+                header_rows.append(row_values)
+
+        headers = self._build_priority_headers(
+            header_rows=header_rows,
+            column_count=work.shape[1],
+        )
+
+        header_structure = self._build_priority_header_structure(
+            header_rows=header_rows,
+            column_count=work.shape[1],
+        )
+
+        header_matrix = self._build_priority_header_matrix(
+            header_rows=header_rows,
+            column_count=work.shape[1],
+        )
+
+        # data
+        cleaned_rows = []
+
+        for _, row in data_area.iterrows():
+            row_values = [
+                self._priority_cell_text(v)
+                for v in row.tolist()
+            ]
+
+            if not any(row_values):
+                continue
+
+            if self._is_priority_numbering_row(row_values):
+                continue
+
+            if self._is_priority_footer_row(row_values):
+                note = " ".join(v for v in row_values if v).strip()
+                if note:
+                    source_notes.append(note)
+                continue
+
+            cleaned_rows.append(row_values)
+
+        source_note = " | ".join(dict.fromkeys(source_notes))
+
+        result = pd.DataFrame(cleaned_rows, columns=headers)
+
+        if not result.empty:
+            result = result.loc[
+                :,
+                ~result.apply(
+                    lambda col: all(
+                        self._priority_cell_text(v) == ""
+                        for v in col
+                    ),
+                    axis=0
+                )
+            ]
+
+        result = result.reset_index(drop=True)
+
+        result.attrs["sheet_title"] = sheet_title
+        result.attrs["source_note"] = source_note
+        result.attrs["raw_years"] = raw_years
+        result.attrs["header_rows"] = header_structure
+        result.attrs["header_matrix"] = header_matrix
+        result.attrs["body_rowspans"] = (
+            self._build_priority_body_rowspans(
+                result
+            )
+        )
+
+        print(
+            "🧹 Priority sheet normalized:",
+            f"title={sheet_title!r}",
+            f"headers={list(result.columns)}",
+            f"rows={len(result)}",
+            f"source={source_note!r}",
+        )
+
+        return result
+
     async def _fetch_sheet_csv(self, link: str) -> Optional[pd.DataFrame]:
         if not link:
             return None
-        
+
         now = time.time()
-        if link in self._csv_data_cache and now < self._csv_data_cache[link]["expiry"]:
+
+        if (
+            link in self._csv_data_cache
+            and now < self._csv_data_cache[link]["expiry"]
+        ):
             return self._csv_data_cache[link]["df"]
-        
+
         gid = self._extract_gid_from_url(link)
         spreadsheet_id = self._extract_spreadsheet_id_from_url(link)
-        
+
         if not spreadsheet_id:
             print(f"⚠️ Cannot extract spreadsheet ID from: {link}")
             return None
-        
+
         if gid:
             csv_url = (
                 f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
@@ -1964,22 +3567,50 @@ class RAGUnifiedModel(BaseModel):
                 f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
                 f"/export?format=csv"
             )
-        
+
         try:
             print(f"🔗 Fetching CSV: {csv_url}")
             print(f"   From link: {link}")
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+
+            async with httpx.AsyncClient(
+                timeout=30,
+                follow_redirects=True
+            ) as client:
                 res = await client.get(csv_url)
                 res.raise_for_status()
-                df = pd.read_csv(StringIO(res.text))
-                df = df.dropna(how="all").dropna(axis=1, how="all").reset_index(drop=True)
-                self._csv_data_cache[link] = {"df": df, "expiry": now + self.cache_ttl}
-                print(f"💾 Fetched CSV from sheet: {len(df)} rows")
+
+                raw_df = pd.read_csv(
+                    StringIO(res.text),
+                    header=None,
+                    dtype=str,
+                    keep_default_na=False,
+                )
+
+                df = self._normalize_priority_sheet(raw_df)
+
+                if df.empty:
+                    print("⚠️ Priority sheet kosong setelah normalisasi")
+                    return None
+
+                self._csv_data_cache[link] = {
+                    "df": df,
+                    "expiry": now + self.cache_ttl,
+                }
+
+                print(
+                    f"💾 Fetched priority sheet: "
+                    f"{len(df)} rows, {len(df.columns)} columns"
+                )
+
                 return df
+
         except Exception as e:
-            print(f"❌ Failed to fetch CSV from {csv_url}: {type(e).__name__}: {e}")
+            print(
+                f"❌ Failed to fetch CSV from {csv_url}: "
+                f"{type(e).__name__}: {e}"
+            )
             return None
-    
+
     def _extract_gid_from_url(self, url: str) -> Optional[str]:
         if "#" in url:
             fragment = url.split("#")[1]
@@ -2003,25 +3634,78 @@ class RAGUnifiedModel(BaseModel):
     # ===== PAYLOAD TABEL =====
     # ============================================================
     
-    def _df_to_table_payload(self, df: pd.DataFrame, title: str, source: str, max_rows: int = 100) -> Dict:
-        """Ubah DataFrame → payload tabel untuk frontend"""
-        def fmt(v):
-            if isinstance(v, float) and v.is_integer():
-                return f"{int(v):,}"
-            if isinstance(v, float):
-                return f"{v:,.2f}"
-            return str(v)
-        
+    def _df_to_table_payload(
+        self,
+        df: pd.DataFrame,
+        title: str,
+        source: str,
+        max_rows: int = 100
+    ) -> Dict:
+        """Ubah DataFrame bersih menjadi payload tabel frontend."""
+
+        def fmt(value):
+            if value is None:
+                return ""
+
+            try:
+                if pd.isna(value):
+                    return ""
+            except Exception:
+                pass
+
+            if isinstance(value, float) and value.is_integer():
+                return f"{int(value):,}"
+
+            if isinstance(value, float):
+                return f"{value:,.2f}"
+
+            value = str(value).strip()
+
+            if value.lower() in {"nan", "none", "null"}:
+                return ""
+
+            return value
+
         head = df.head(max_rows)
-        rows = [[fmt(v) for v in r] for r in head.values.tolist()]
-        return {
+
+        rows = [
+            [fmt(value) for value in row]
+            for row in head.values.tolist()
+        ]
+
+        payload = {
             "title": title,
             "source": source,
-            "columns": [str(c) for c in df.columns],
+            "columns": [str(column) for column in df.columns],
             "rows": rows,
             "total_rows": int(len(df))
         }
-    
+
+        source_note = str(df.attrs.get("source_note", "")).strip()
+
+        if source_note:
+            payload["source_note"] = source_note
+
+        header_rows = df.attrs.get("header_rows", [])
+        if header_rows:
+            payload["header_rows"] = header_rows
+
+        header_matrix = df.attrs.get("header_matrix", [])
+        if header_matrix:
+            payload["header_matrix"] = header_matrix
+
+        body_rowspans = df.attrs.get(
+            "body_rowspans",
+            []
+        )
+
+        if body_rowspans:
+            payload["body_rowspans"] = (
+                body_rowspans
+            )
+
+        return payload
+
     # ============================================================
     # ===== BUILD CONTEXT =====
     # ============================================================

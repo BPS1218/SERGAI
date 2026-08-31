@@ -19,3 +19,6 @@ a2wsgi>=1.10.0
 
 pandas>=2.0.0
 openpyxl>=3.1.0
+
+# Language detection untuk membersihkan header bilingual tabel prioritas
+lingua-language-detector

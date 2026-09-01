@@ -393,7 +393,6 @@ class RAGUnifiedModel(BaseModel):
             "download",
             "unduh",
             "link",
-            "buku"
         }
 
         tokens = []
@@ -2384,8 +2383,79 @@ class RAGUnifiedModel(BaseModel):
     # ============================================================
     
     def _extract_year(self, text: str) -> Optional[str]:
-        match = re.search(r'\b(20\d{2})\b', text)
-        return match.group(1) if match else None
+        """
+        Ambil tahun referensi data dari pertanyaan pengguna.
+
+        Penting:
+        - Tahun pada frasa seperti "harga konstan 2010" atau
+          "tahun dasar 2010" adalah tahun dasar/metodologis,
+          BUKAN otomatis tahun data.
+        - Jika pengguna menyebut "tahun 2025", "pada tahun 2025",
+          atau "periode 2025", tahun tersebut diprioritaskan.
+        """
+        text = str(text or "").strip()
+
+        if not text:
+            return None
+
+        # 1. Prioritaskan penyebutan tahun data secara eksplisit.
+        explicit_patterns = [
+            r"\bpada\s+tahun\s+(20\d{2})\b",
+            r"\btahun\s+(20\d{2})\b",
+            r"\bperiode\s+(20\d{2})\b",
+        ]
+
+        for pattern in explicit_patterns:
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                return match.group(1)
+
+        # 2. Ambil seluruh tahun 20xx yang muncul.
+        years = re.findall(
+            r"\b(20\d{2})\b",
+            text,
+        )
+
+        if not years:
+            return None
+
+        # 3. Tandai tahun dasar/metodologis agar tidak dipakai
+        #    sebagai tahun referensi data.
+        base_year_patterns = [
+            r"\bharga\s+konstan(?:\s+tahun\s+dasar)?\s+(20\d{2})\b",
+            r"\btahun\s+dasar\s+(20\d{2})\b",
+            r"\bdasar\s+harg[ai]\s+(20\d{2})\b",
+        ]
+
+        base_years = set()
+
+        for pattern in base_year_patterns:
+            base_years.update(
+                re.findall(
+                    pattern,
+                    text,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+        valid_years = [
+            year
+            for year in years
+            if year not in base_years
+        ]
+
+        # 4. Jika masih ada tahun non-dasar, pakai tahun terakhir.
+        #    Ini juga menangani judul/rentang seperti 2021-2025.
+        if valid_years:
+            return valid_years[-1]
+
+        # 5. Bila yang ada hanya tahun dasar, berarti pengguna
+        #    tidak menyebut tahun referensi data.
+        return None
     
     async def _fetch_bps_with_fallback(
         self, var_id: str, user_year: Optional[str]
@@ -2441,107 +2511,504 @@ class RAGUnifiedModel(BaseModel):
             print(f"   ⚠️ BPS fetch error var={var_id} th={year_code}: {e}")
         return None
     
-    def _parse_bps_json(self, json_data: Dict, used_year: str) -> Tuple[str, Optional[Dict]]:
-        """Parse JSON BPS → (teks konteks, payload tabel) dengan struktur key:
-        {vervar}{var}{turvar}{tahun}{turtahun}"""
+    def _parse_bps_json(
+        self,
+        json_data: Dict,
+        used_year: str
+    ) -> Tuple[str, Optional[Dict]]:
+        """
+        Parse JSON BPS menjadi:
+        - teks konteks untuk LLM
+        - payload tabel untuk frontend
+
+        Struktur key BPS:
+        {vervar}{var}{turvar}{tahun}{turtahun}
+
+        Prinsip:
+        1. Nilai yang dikirim WebAPI dipertahankan apa adanya.
+        2. Tidak dilakukan pembulatan atau format ulang angka.
+        3. Jika kombinasi sel tabel tersedia secara struktural
+        tetapi key-nya tidak ada di datacontent, tampilkan "-".
+        4. Simbol BPS dipertahankan agar dapat dideteksi
+        oleh _detect_bps_symbol_notes().
+        """
+
         try:
-            var_info = json_data.get("var", [{}])[0]
-            var_val = str(var_info.get("val"))
-            unit = var_info.get("unit", "")
-            row_header = json_data.get("labelvervar", "") or "Kategori"
-            
-            vervars = json_data.get("vervar", [])
-            turvars = json_data.get("turvar", [])
-            tahuns = json_data.get("tahun", [])
-            turtahuns = json_data.get("turtahun", [])
-            datacontent = json_data.get("datacontent", {})
-            
-            tahun_obj = next((t for t in tahuns if str(t.get("label")) == used_year), None)
+            # =====================================================
+            # INFORMASI VARIABEL
+            # =====================================================
+
+            var_info = json_data.get(
+                "var",
+                [{}],
+            )[0]
+
+            var_val = str(
+                var_info.get("val")
+            )
+
+            unit = (
+                var_info.get(
+                    "unit",
+                    "",
+                )
+                or ""
+            )
+
+            row_header = (
+                json_data.get(
+                    "labelvervar",
+                    "",
+                )
+                or "Kategori"
+            )
+
+            # =====================================================
+            # STRUKTUR DATA BPS
+            # =====================================================
+
+            vervars = json_data.get(
+                "vervar",
+                [],
+            )
+
+            turvars = json_data.get(
+                "turvar",
+                [],
+            )
+
+            tahuns = json_data.get(
+                "tahun",
+                [],
+            )
+
+            turtahuns = json_data.get(
+                "turtahun",
+                [],
+            )
+
+            datacontent = json_data.get(
+                "datacontent",
+                {},
+            ) or {}
+
+            # =====================================================
+            # CARI TAHUN YANG DIGUNAKAN
+            # =====================================================
+
+            tahun_obj = next(
+                (
+                    t
+                    for t in tahuns
+                    if str(
+                        t.get("label")
+                    )
+                    == str(used_year)
+                ),
+                None,
+            )
+
             if not tahun_obj:
-                return "⚠️ Format data tidak dikenali.", None
-            tahun_val = str(tahun_obj.get("val"))
-            
-            def fmt_num(v):
-                if isinstance(v, float) and v.is_integer():
-                    return f"{int(v):,}"
-                if isinstance(v, float):
-                    return f"{v:,.2f}"
-                return f"{v:,}" if isinstance(v, int) else str(v)
-            
-            # ✅ Kolom nilai DINAMIS: turvar kalau >1, sonst turtahun, sonst 1 kolom
+                return (
+                    "⚠️ Format data tidak dikenali.",
+                    None,
+                )
+
+            tahun_val = str(
+                tahun_obj.get("val")
+            )
+
+            # =====================================================
+            # FORMAT NILAI
+            # =====================================================
+
+            def fmt_raw_value(value):
+                """
+                Pertahankan nilai yang diberikan WebAPI.
+
+                Tidak:
+                - membulatkan;
+                - memberi separator ribuan;
+                - menghapus simbol;
+                - menerjemahkan simbol.
+                """
+
+                if value is None:
+                    return ""
+
+                return str(value)
+
+            # =====================================================
+            # TENTUKAN STRUKTUR KOLOM
+            # =====================================================
+
             if len(turvars) > 1:
+                # Contoh:
+                # Triwulan I | Triwulan II | ...
                 col_mode = "turvar"
+
                 col_list = turvars
+
             elif len(turtahuns) > 1:
+                # Beberapa kategori turunan tahun
                 col_mode = "turtahun"
+
                 col_list = turtahuns
+
             else:
+                # Hanya satu nilai
                 col_mode = "single"
+
                 col_list = []
-            
-            lines = [f"📊 {var_info.get('label', 'Data')} (Tahun {used_year})"]
+
+            # =====================================================
+            # PENAMPUNG HASIL
+            # =====================================================
+
+            lines = [
+                (
+                    f"📊 "
+                    f"{var_info.get('label', 'Data')} "
+                    f"(Tahun {used_year})"
+                )
+            ]
+
             priority_rows = []
+
             other_rows = []
+
             table_rows = []
-            
+
+            # =====================================================
+            # LOOP BARIS
+            # =====================================================
+
             for v in vervars:
-                v_val = str(v.get("val"))
-                row_label = str(v.get("label", f"Kode {v_val}"))
-                is_priority = any(k in row_label.upper() for k in ["TOTAL", "JUMLAH", "SERDANG", "KAB"])
-                
-                parts = [row_label]
-                cells = [row_label]
-                
+                v_val = str(
+                    v.get("val")
+                )
+
+                row_label = str(
+                    v.get(
+                        "label",
+                        f"Kode {v_val}",
+                    )
+                )
+
+                is_priority = any(
+                    keyword
+                    in row_label.upper()
+                    for keyword in [
+                        "TOTAL",
+                        "JUMLAH",
+                        "SERDANG",
+                        "KAB",
+                    ]
+                )
+
+                parts = [
+                    row_label
+                ]
+
+                cells = [
+                    row_label
+                ]
+
+                # =================================================
+                # MODE 1 KOLOM
+                # =================================================
+
                 if col_mode == "single":
-                    t_val = str(turvars[0]["val"]) if turvars else ""
-                    tt_val = str(turtahuns[0]["val"]) if turtahuns else "0"
-                    key = f"{v_val}{var_val}{t_val}{tahun_val}{tt_val}"
-                    value = datacontent.get(key)
-                    val_str = fmt_num(value) if value is not None else ""
-                    parts.append(f"{val_str} {unit}".strip())
-                    cells.append(val_str)
+                    t_val = (
+                        str(
+                            turvars[0]["val"]
+                        )
+                        if turvars
+                        else ""
+                    )
+
+                    tt_val = (
+                        str(
+                            turtahuns[0][
+                                "val"
+                            ]
+                        )
+                        if turtahuns
+                        else "0"
+                    )
+
+                    key = (
+                        f"{v_val}"
+                        f"{var_val}"
+                        f"{t_val}"
+                        f"{tahun_val}"
+                        f"{tt_val}"
+                    )
+
+                    # =============================================
+                    # PENTING:
+                    # Jika key memang dikirim BPS, ambil nilai
+                    # apa adanya.
+                    #
+                    # Jika kombinasi tabel ada tetapi key tidak
+                    # dikirim, tampilkan "-" seperti tabel BPS.
+                    # =============================================
+
+                    if key in datacontent:
+                        value = (
+                            datacontent[
+                                key
+                            ]
+                        )
+
+                        val_str = (
+                            fmt_raw_value(
+                                value
+                            )
+                        )
+
+                    else:
+                        val_str = "-"
+
+                    parts.append(
+                        (
+                            f"{val_str} "
+                            f"{unit}"
+                        ).strip()
+                    )
+
+                    cells.append(
+                        val_str
+                    )
+
+                # =================================================
+                # MODE MULTI KOLOM
+                # =================================================
+
                 else:
                     for c in col_list:
-                        c_val = str(c.get("val"))
-                        c_label = str(c.get("label", ""))
-                        if col_mode == "turvar":
-                            tt_val = str(turtahuns[0]["val"]) if turtahuns else "0"
-                            key = f"{v_val}{var_val}{c_val}{tahun_val}{tt_val}"
+                        c_val = str(
+                            c.get("val")
+                        )
+
+                        c_label = str(
+                            c.get(
+                                "label",
+                                "",
+                            )
+                        )
+
+                        # =========================================
+                        # KOLOM BERASAL DARI TURVAR
+                        # =========================================
+
+                        if (
+                            col_mode
+                            == "turvar"
+                        ):
+                            tt_val = (
+                                str(
+                                    turtahuns[
+                                        0
+                                    ][
+                                        "val"
+                                    ]
+                                )
+                                if turtahuns
+                                else "0"
+                            )
+
+                            key = (
+                                f"{v_val}"
+                                f"{var_val}"
+                                f"{c_val}"
+                                f"{tahun_val}"
+                                f"{tt_val}"
+                            )
+
+                        # =========================================
+                        # KOLOM BERASAL DARI TURTAHUN
+                        # =========================================
+
                         else:
-                            t_val = str(turvars[0]["val"]) if turvars else ""
-                            key = f"{v_val}{var_val}{t_val}{tahun_val}{c_val}"
-                        value = datacontent.get(key)
-                        val_str = fmt_num(value) if value is not None else ""
-                        parts.append(f"{c_label}: {val_str} {unit}".strip())
-                        cells.append(val_str)
-                
-                row_text = " | ".join(parts)
-                (priority_rows if is_priority else other_rows).append(
-                    ("🔹 " if is_priority else "• ") + row_text
+                            t_val = (
+                                str(
+                                    turvars[
+                                        0
+                                    ][
+                                        "val"
+                                    ]
+                                )
+                                if turvars
+                                else ""
+                            )
+
+                            key = (
+                                f"{v_val}"
+                                f"{var_val}"
+                                f"{t_val}"
+                                f"{tahun_val}"
+                                f"{c_val}"
+                            )
+
+                        # =========================================
+                        # NILAI SEL
+                        # =========================================
+
+                        if key in datacontent:
+                            value = (
+                                datacontent[
+                                    key
+                                ]
+                            )
+
+                            val_str = (
+                                fmt_raw_value(
+                                    value
+                                )
+                            )
+
+                        else:
+                            val_str = "-"
+
+                        parts.append(
+                            (
+                                f"{c_label}: "
+                                f"{val_str} "
+                                f"{unit}"
+                            ).strip()
+                        )
+
+                        cells.append(
+                            val_str
+                        )
+
+                # =================================================
+                # SIMPAN BARIS
+                # =================================================
+
+                row_text = (
+                    " | ".join(
+                        parts
+                    )
                 )
-                table_rows.append(cells)
-            
-            lines.extend(priority_rows)
-            lines.extend(other_rows)
-            
+
+                if is_priority:
+                    priority_rows.append(
+                        "🔹 "
+                        + row_text
+                    )
+
+                else:
+                    other_rows.append(
+                        "• "
+                        + row_text
+                    )
+
+                table_rows.append(
+                    cells
+                )
+
+            # =====================================================
+            # CONTEXT UNTUK LLM
+            # =====================================================
+
+            lines.extend(
+                priority_rows
+            )
+
+            lines.extend(
+                other_rows
+            )
+
+            # =====================================================
+            # HEADER TABEL
+            # =====================================================
+
             if col_mode == "single":
-                headers = [f"Nilai ({unit})" if unit else "Nilai"]
+                headers = [
+                    (
+                        f"Nilai ({unit})"
+                        if unit
+                        else "Nilai"
+                    )
+                ]
+
             else:
-                headers = [str(c.get("label", "")) for c in col_list]
-            
+                headers = [
+                    str(
+                        c.get(
+                            "label",
+                            "",
+                        )
+                    )
+                    for c in col_list
+                ]
+
+            # =====================================================
+            # PAYLOAD TABEL
+            # =====================================================
+
             payload = {
-                "title": var_info.get("label", "Data"),
-                "source": "Tabel Dinamis BPS",
-                "columns": [row_header] + headers,
-                "rows": table_rows,
-                "total_rows": len(table_rows)
+                "title": (
+                    var_info.get(
+                        "label",
+                        "Data",
+                    )
+                ),
+
+                "source":
+                    "Tabel Dinamis BPS",
+
+                "columns":
+                    [row_header]
+                    + headers,
+
+                "rows":
+                    table_rows,
+
+                "total_rows":
+                    len(
+                        table_rows
+                    ),
             }
-            return "\n".join(lines), payload
-            
+
+            # =====================================================
+            # DETEKSI SIMBOL YANG MUNCUL
+            # =====================================================
+
+            symbol_notes = (
+                self
+                ._detect_bps_symbol_notes(
+                    payload
+                )
+            )
+
+            if symbol_notes:
+                payload[
+                    "symbol_notes"
+                ] = symbol_notes
+
+            # =====================================================
+            # RETURN
+            # =====================================================
+
+            return (
+                "\n".join(
+                    lines
+                ),
+                payload,
+            )
+
         except Exception as e:
-            print(f"❌ BPS parse error: {e}")
-            return "⚠️ Gagal memproses format data BPS.", None
-        
+            print(
+                f"❌ BPS parse error: {e}"
+            )
+
+            return (
+                "⚠️ Gagal memproses format data BPS.",
+                None,
+            )
     # ============================================================
     # ===== REKAP SPREADSHEET =====
     # ============================================================
@@ -3634,6 +4101,83 @@ class RAGUnifiedModel(BaseModel):
     # ===== PAYLOAD TABEL =====
     # ============================================================
     
+
+    # ============================================================
+    # ===== SIMBOL / KETERANGAN DATA BPS ========================
+    # ============================================================
+
+    def _detect_bps_symbol_notes(self, table: Dict) -> List[Dict[str, str]]:
+        """
+        Deteksi HANYA simbol BPS yang benar-benar muncul pada tabel.
+        Fungsi ini tidak mengubah isi tabel.
+        """
+
+        meanings = {
+            "...": "Data tidak tersedia",
+            "-": "Tidak ada atau nol",
+            "NA": "Data tidak dapat ditampilkan",
+            "e": "Angka estimasi",
+            "r": "Angka diperbaiki",
+            "~0": "Data dapat diabaikan",
+            "*": "Angka sementara",
+            "**": "Angka sangat sementara",
+            "***": "Angka sangat sangat sementara",
+        }
+
+        found = set()
+
+        def inspect(value):
+            if value is None:
+                return
+
+            text = str(value).strip()
+            if not text:
+                return
+
+            # Simbol yang berdiri sendiri.
+            if text in {"...", "-", "NA", "~0"}:
+                found.add(text)
+
+            # e/r sebagai anotasi angka, bukan huruf biasa pada label.
+            if re.search(r"[-+]?\d[\d.,\s]*e$", text, flags=re.IGNORECASE):
+                found.add("e")
+
+            if re.search(r"[-+]?\d[\d.,\s]*r$", text, flags=re.IGNORECASE):
+                found.add("r")
+
+            # Bintang dibaca sesuai jumlah yang benar-benar muncul.
+            for star_run in re.findall(r"\*{1,3}", text):
+                if star_run in {"*", "**", "***"}:
+                    found.add(star_run)
+
+        # Header biasa.
+        for column in table.get("columns", []) or []:
+            inspect(column)
+
+        # Header bertingkat.
+        for header_row in table.get("header_rows", []) or []:
+            for cell in header_row or []:
+                if isinstance(cell, dict):
+                    inspect(cell.get("label", ""))
+                else:
+                    inspect(cell)
+
+        # Isi tabel.
+        for row in table.get("rows", []) or []:
+            for value in row or []:
+                inspect(value)
+
+        order = ["...", "-", "NA", "e", "r", "~0", "*", "**", "***"]
+
+        return [
+            {
+                "symbol": symbol,
+                "meaning": meanings[symbol],
+            }
+            for symbol in order
+            if symbol in found
+        ]
+
     def _df_to_table_payload(
         self,
         df: pd.DataFrame,
@@ -3644,6 +4188,10 @@ class RAGUnifiedModel(BaseModel):
         """Ubah DataFrame bersih menjadi payload tabel frontend."""
 
         def fmt(value):
+            """
+            Pertahankan nilai sumber apa adanya.
+            Hanya missing value nyata dari pandas yang menjadi sel kosong.
+            """
             if value is None:
                 return ""
 
@@ -3653,18 +4201,7 @@ class RAGUnifiedModel(BaseModel):
             except Exception:
                 pass
 
-            if isinstance(value, float) and value.is_integer():
-                return f"{int(value):,}"
-
-            if isinstance(value, float):
-                return f"{value:,.2f}"
-
-            value = str(value).strip()
-
-            if value.lower() in {"nan", "none", "null"}:
-                return ""
-
-            return value
+            return str(value)
 
         head = df.head(max_rows)
 
@@ -3703,6 +4240,10 @@ class RAGUnifiedModel(BaseModel):
             payload["body_rowspans"] = (
                 body_rowspans
             )
+
+        symbol_notes = self._detect_bps_symbol_notes(payload)
+        if symbol_notes:
+            payload["symbol_notes"] = symbol_notes
 
         return payload
 
@@ -3807,6 +4348,146 @@ class RAGUnifiedModel(BaseModel):
                 print(f"⚠️ OpenAI init failed: {e}")
         return self._openai
     
+    def _ensure_statistical_source_in_answer(
+        self,
+        answer: str,
+        sources: List[Source],
+        meta: Dict,
+        table: Optional[Dict] = None,
+    ) -> str:
+        """
+        Pastikan jawaban data statistik tetap menampilkan satu sumber.
+
+        Aturan:
+        1. Sheet prioritas dengan source_note -> sumber sudah ditampilkan
+           frontend dari source_note, jadi tidak ditambahkan lagi.
+        2. Tabel Dinamis/WebAPI -> tambahkan sumber ke jawaban karena
+           tabel dinamis tidak mempunyai source_note.
+        3. Jawaban data tanpa tabel -> sumber tetap ditambahkan.
+        4. Hanya berlaku untuk response data statistik.
+        """
+        answer = str(answer or "").strip()
+        statistical_source = str(meta.get("source", "")).strip()
+
+        if statistical_source not in {"database_bps", "rekap_sheet"}:
+            return answer
+
+        if table and str(table.get("source_note", "")).strip():
+            return answer
+
+        if re.search(r"(?im)^\s*(?:📖\s*)?sumber\s*:", answer):
+            return answer
+
+        primary_source = None
+
+        for source in sources or []:
+            source_type = str(getattr(source, "type", "") or "").strip().lower()
+            source_name = str(getattr(source, "name", "") or "").strip()
+
+            if not source_name:
+                continue
+            if source_type == "definition":
+                continue
+            if source_name.lower().startswith("sumber definisi"):
+                continue
+
+            primary_source = source_name
+            break
+
+        if not primary_source:
+            if statistical_source == "database_bps":
+                primary_source = "Tabel Dinamis BPS"
+            else:
+                primary_source = "BPS Kabupaten Serdang Bedagai"
+
+        source_line = f"📖 Sumber: {primary_source}"
+
+        if not answer:
+            return source_line
+
+        return f"{answer}\n\n{source_line}"
+
+    # async def _generate_with_fallback(
+    #     self,
+    #     question: str,
+    #     context_text: str,
+    #     sources: List[Source],
+    #     meta: Dict,
+    #     chat_history: Optional[List[Dict]],
+    #     table: Optional[Dict] = None
+    # ) -> ModelResponse:
+    #     # ===== Coba Gemini =====
+    #     gemini = self._get_gemini()
+    #     if gemini:
+    #         try:
+    #             response = await gemini.generate_response(
+    #                 question=question,
+    #                 chat_history=chat_history,
+    #                 context=context_text
+    #             )
+    #             if response.success:
+    #                 response.sources = sources
+    #                 response.table = table
+    #                 response.meta = {
+    #                     **meta,
+    #                     "model_used": "gemini"
+    #                 }
+    #                 response.answer = (
+    #                     self._ensure_statistical_source_in_answer(
+    #                         answer=response.answer,
+    #                         sources=sources,
+    #                         meta=meta,
+    #                         table=table,
+    #                     )
+    #                 )
+    #                 return response
+    #             else:
+    #                 print(f"⚠️ Gemini gagal: {response.error}")
+    #         except Exception as e:
+    #             print(f"⚠️ Gemini exception: {type(e).__name__}: {e}")
+        
+    #     # ===== Fallback OpenAI =====
+    #     openai = self._get_openai()
+    #     if openai:
+    #         try:
+    #             response = await openai.generate_response(
+    #                 question=question,
+    #                 chat_history=chat_history,
+    #                 context=context_text
+    #             )
+    #             if response.success:
+    #                 response.sources = sources
+    #                 response.table = table
+    #                 response.meta = {
+    #                     **meta,
+    #                     "model_used": "openai",
+    #                     "fallback": True
+    #                 }
+    #                 response.answer = (
+    #                     self._ensure_statistical_source_in_answer(
+    #                         answer=response.answer,
+    #                         sources=sources,
+    #                         meta=meta,
+    #                         table=table,
+    #                     )
+    #                 )
+    #                 return response
+    #             else:
+    #                 print(f"⚠️ OpenAI gagal: {response.error}")
+    #         except Exception as e:
+    #             print(f"⚠️ OpenAI exception: {type(e).__name__}: {e}")
+        
+    #     # ===== Keduanya gagal =====
+    #     return ModelResponse(
+    #         answer=(
+    #             "Maaf, saat ini sistem sedang mengalami kendala dalam menghasilkan "
+    #             "jawaban. Silakan coba beberapa saat lagi."
+    #         ),
+    #         sources=sources,
+    #         table=table,
+    #         meta={**meta, "fallback_failed": True, "model_used": "failed"},
+    #         success=False
+    #     )
     async def _generate_with_fallback(
         self,
         question: str,
@@ -3816,52 +4497,112 @@ class RAGUnifiedModel(BaseModel):
         chat_history: Optional[List[Dict]],
         table: Optional[Dict] = None
     ) -> ModelResponse:
-        # ===== Coba Gemini =====
-        gemini = self._get_gemini()
-        if gemini:
-            try:
-                response = await gemini.generate_response(
-                    question=question,
-                    chat_history=chat_history,
-                    context=context_text
-                )
-                if response.success:
-                    response.sources = sources
-                    response.table = table
-                    response.meta = {**meta, "model_used": "gemini"}
-                    return response
-                else:
-                    print(f"⚠️ Gemini gagal: {response.error}")
-            except Exception as e:
-                print(f"⚠️ Gemini exception: {type(e).__name__}: {e}")
-        
-        # ===== Fallback OpenAI =====
+
+        # ============================================================
+        # TEST OPENAI DULU
+        # ============================================================
+
         openai = self._get_openai()
+
         if openai:
             try:
+                print("🧪 TEST MODE: mencoba OpenAI...")
+
                 response = await openai.generate_response(
                     question=question,
                     chat_history=chat_history,
                     context=context_text
                 )
+
                 if response.success:
+                    print("✅ OpenAI berhasil")
+
                     response.sources = sources
                     response.table = table
-                    response.meta = {**meta, "model_used": "openai", "fallback": True}
+
+                    response.meta = {
+                        **meta,
+                        "model_used": "openai",
+                        "test_mode": True,
+                    }
+
                     return response
+
                 else:
-                    print(f"⚠️ OpenAI gagal: {response.error}")
+                    print(
+                        f"⚠️ OpenAI gagal: {response.error}"
+                    )
+
             except Exception as e:
-                print(f"⚠️ OpenAI exception: {type(e).__name__}: {e}")
-        
-        # ===== Keduanya gagal =====
+                print(
+                    f"⚠️ OpenAI exception: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+        else:
+            print(
+                "⚠️ OpenAI tidak aktif / OPENAI_API_KEY tidak ditemukan"
+            )
+
+        # ============================================================
+        # FALLBACK KE GEMINI SAAT TEST OPENAI GAGAL
+        # ============================================================
+
+        gemini = self._get_gemini()
+
+        if gemini:
+            try:
+                print(
+                    "🔄 OpenAI gagal/tidak aktif, mencoba Gemini..."
+                )
+
+                response = await gemini.generate_response(
+                    question=question,
+                    chat_history=chat_history,
+                    context=context_text
+                )
+
+                if response.success:
+                    print("✅ Gemini berhasil")
+
+                    response.sources = sources
+                    response.table = table
+
+                    response.meta = {
+                        **meta,
+                        "model_used": "gemini",
+                        "fallback": True,
+                    }
+
+                    return response
+
+                else:
+                    print(
+                        f"⚠️ Gemini gagal: {response.error}"
+                    )
+
+            except Exception as e:
+                print(
+                    f"⚠️ Gemini exception: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+        # ============================================================
+        # KEDUANYA GAGAL
+        # ============================================================
+
         return ModelResponse(
             answer=(
-                "Maaf, saat ini sistem sedang mengalami kendala dalam menghasilkan "
-                "jawaban. Silakan coba beberapa saat lagi."
+                "Maaf, saat ini sistem sedang mengalami kendala "
+                "dalam menghasilkan jawaban. "
+                "Silakan coba beberapa saat lagi."
             ),
             sources=sources,
             table=table,
-            meta={**meta, "fallback_failed": True, "model_used": "failed"},
+            meta={
+                **meta,
+                "fallback_failed": True,
+                "model_used": "failed",
+            },
             success=False
         )

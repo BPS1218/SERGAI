@@ -1266,10 +1266,12 @@ class RAGUnifiedModel(BaseModel):
 
                 return ModelResponse(
                     answer=(
-                        f"Maaf, data **{selected_group['title']}** "
-                        "belum tersedia pada sumber data yang dapat diakses saat ini.\n\n"
-                        "Silakan kunjungi Pelayanan Statistik Terpadu "
-                        "(PST) BPS Kabupaten Serdang Bedagai."
+                        f"Maaf, informasi yang Anda minta, yaitu **{question}**, "
+                        "belum tersedia pada chatbot.\n\n"
+                        "Sistem sergAI masih dalam tahap pengembangan. Untuk sementara, "
+                        "silakan kunjungi langsung **Pelayanan Statistik Terpadu (PST) "
+                        "BPS Kabupaten Serdang Bedagai** untuk mendapatkan data tersebut.\n\n"
+                        "atau mengunjungi Website: https://serdangbedagaikab.bps.go.id"
                     ),
                     sources=[
                         Source(
@@ -1515,7 +1517,11 @@ class RAGUnifiedModel(BaseModel):
 
                 chat_history=chat_history,
 
-                table=table_payload,
+                table=(
+                    table_payload
+                    if include_table
+                    else None
+                ),
             )
             
             # ===== 4. TIDAK ADA YANG MATCH / DATA TIDAK TERSEDIA =====
@@ -1524,11 +1530,11 @@ class RAGUnifiedModel(BaseModel):
                 year_msg = bps_failed_info["user_year"] or "2020-2025"
                 return ModelResponse(
                     answer=(
-                        f"Maaf, data '{bps_failed_info['title']}' untuk tahun "
-                        f"{year_msg} belum tersedia di sistem BPS maupun di sumber prioritas kami.\n\n"
-                        "Silakan kunjungi langsung **Pelayanan Statistik Terpadu "
-                        "(PST) BPS Kabupaten Serdang Bedagai** untuk mendapatkan "
-                        "data tersebut.\n\n"
+                        f"Maaf, informasi yang Anda minta, yaitu **{question}**, "
+                        "belum tersedia pada chatbot.\n\n"
+                        "Sistem sergAI masih dalam tahap pengembangan. Untuk sementara, "
+                        "silakan kunjungi langsung **Pelayanan Statistik Terpadu (PST) "
+                        "BPS Kabupaten Serdang Bedagai** untuk mendapatkan data tersebut.\n\n"
                         "atau mengunjungi Website: https://serdangbedagaikab.bps.go.id"
                     ),
                     sources=[Source(
@@ -1541,7 +1547,8 @@ class RAGUnifiedModel(BaseModel):
             
             return ModelResponse(
                 answer=(
-                    "Maaf, data yang Anda tanyakan belum tersedia di sistem kami.\n\n"
+                    f"Maaf, informasi yang Anda minta, yaitu **{question}**, "
+                    "belum tersedia pada chatbot.\n\n"
                     "Sistem sergAI masih dalam tahap pengembangan. Untuk sementara, "
                     "silakan kunjungi langsung **Pelayanan Statistik Terpadu (PST) "
                     "BPS Kabupaten Serdang Bedagai** untuk mendapatkan data tersebut.\n\n"
@@ -4407,87 +4414,6 @@ class RAGUnifiedModel(BaseModel):
 
         return f"{answer}\n\n{source_line}"
 
-    # async def _generate_with_fallback(
-    #     self,
-    #     question: str,
-    #     context_text: str,
-    #     sources: List[Source],
-    #     meta: Dict,
-    #     chat_history: Optional[List[Dict]],
-    #     table: Optional[Dict] = None
-    # ) -> ModelResponse:
-    #     # ===== Coba Gemini =====
-    #     gemini = self._get_gemini()
-    #     if gemini:
-    #         try:
-    #             response = await gemini.generate_response(
-    #                 question=question,
-    #                 chat_history=chat_history,
-    #                 context=context_text
-    #             )
-    #             if response.success:
-    #                 response.sources = sources
-    #                 response.table = table
-    #                 response.meta = {
-    #                     **meta,
-    #                     "model_used": "gemini"
-    #                 }
-    #                 response.answer = (
-    #                     self._ensure_statistical_source_in_answer(
-    #                         answer=response.answer,
-    #                         sources=sources,
-    #                         meta=meta,
-    #                         table=table,
-    #                     )
-    #                 )
-    #                 return response
-    #             else:
-    #                 print(f"⚠️ Gemini gagal: {response.error}")
-    #         except Exception as e:
-    #             print(f"⚠️ Gemini exception: {type(e).__name__}: {e}")
-        
-    #     # ===== Fallback OpenAI =====
-    #     openai = self._get_openai()
-    #     if openai:
-    #         try:
-    #             response = await openai.generate_response(
-    #                 question=question,
-    #                 chat_history=chat_history,
-    #                 context=context_text
-    #             )
-    #             if response.success:
-    #                 response.sources = sources
-    #                 response.table = table
-    #                 response.meta = {
-    #                     **meta,
-    #                     "model_used": "openai",
-    #                     "fallback": True
-    #                 }
-    #                 response.answer = (
-    #                     self._ensure_statistical_source_in_answer(
-    #                         answer=response.answer,
-    #                         sources=sources,
-    #                         meta=meta,
-    #                         table=table,
-    #                     )
-    #                 )
-    #                 return response
-    #             else:
-    #                 print(f"⚠️ OpenAI gagal: {response.error}")
-    #         except Exception as e:
-    #             print(f"⚠️ OpenAI exception: {type(e).__name__}: {e}")
-        
-    #     # ===== Keduanya gagal =====
-    #     return ModelResponse(
-    #         answer=(
-    #             "Maaf, saat ini sistem sedang mengalami kendala dalam menghasilkan "
-    #             "jawaban. Silakan coba beberapa saat lagi."
-    #         ),
-    #         sources=sources,
-    #         table=table,
-    #         meta={**meta, "fallback_failed": True, "model_used": "failed"},
-    #         success=False
-    #     )
     async def _generate_with_fallback(
         self,
         question: str,
@@ -4497,112 +4423,194 @@ class RAGUnifiedModel(BaseModel):
         chat_history: Optional[List[Dict]],
         table: Optional[Dict] = None
     ) -> ModelResponse:
-
-        # ============================================================
-        # TEST OPENAI DULU
-        # ============================================================
-
-        openai = self._get_openai()
-
-        if openai:
-            try:
-                print("🧪 TEST MODE: mencoba OpenAI...")
-
-                response = await openai.generate_response(
-                    question=question,
-                    chat_history=chat_history,
-                    context=context_text
-                )
-
-                if response.success:
-                    print("✅ OpenAI berhasil")
-
-                    response.sources = sources
-                    response.table = table
-
-                    response.meta = {
-                        **meta,
-                        "model_used": "openai",
-                        "test_mode": True,
-                    }
-
-                    return response
-
-                else:
-                    print(
-                        f"⚠️ OpenAI gagal: {response.error}"
-                    )
-
-            except Exception as e:
-                print(
-                    f"⚠️ OpenAI exception: "
-                    f"{type(e).__name__}: {e}"
-                )
-
-        else:
-            print(
-                "⚠️ OpenAI tidak aktif / OPENAI_API_KEY tidak ditemukan"
-            )
-
-        # ============================================================
-        # FALLBACK KE GEMINI SAAT TEST OPENAI GAGAL
-        # ============================================================
-
+        # ===== Coba Gemini =====
         gemini = self._get_gemini()
-
         if gemini:
             try:
-                print(
-                    "🔄 OpenAI gagal/tidak aktif, mencoba Gemini..."
-                )
-
                 response = await gemini.generate_response(
                     question=question,
                     chat_history=chat_history,
                     context=context_text
                 )
-
                 if response.success:
-                    print("✅ Gemini berhasil")
-
                     response.sources = sources
                     response.table = table
-
                     response.meta = {
                         **meta,
-                        "model_used": "gemini",
-                        "fallback": True,
+                        "model_used": "gemini"
                     }
-
-                    return response
-
-                else:
-                    print(
-                        f"⚠️ Gemini gagal: {response.error}"
+                    response.answer = (
+                        self._ensure_statistical_source_in_answer(
+                            answer=response.answer,
+                            sources=sources,
+                            meta=meta,
+                            table=table,
+                        )
                     )
-
+                    return response
+                else:
+                    print(f"⚠️ Gemini gagal: {response.error}")
             except Exception as e:
-                print(
-                    f"⚠️ Gemini exception: "
-                    f"{type(e).__name__}: {e}"
+                print(f"⚠️ Gemini exception: {type(e).__name__}: {e}")
+        
+        # ===== Fallback OpenAI =====
+        openai = self._get_openai()
+        if openai:
+            try:
+                response = await openai.generate_response(
+                    question=question,
+                    chat_history=chat_history,
+                    context=context_text
                 )
-
-        # ============================================================
-        # KEDUANYA GAGAL
-        # ============================================================
-
+                if response.success:
+                    response.sources = sources
+                    response.table = table
+                    response.meta = {
+                        **meta,
+                        "model_used": "openai",
+                        "fallback": True
+                    }
+                    response.answer = (
+                        self._ensure_statistical_source_in_answer(
+                            answer=response.answer,
+                            sources=sources,
+                            meta=meta,
+                            table=table,
+                        )
+                    )
+                    return response
+                else:
+                    print(f"⚠️ OpenAI gagal: {response.error}")
+            except Exception as e:
+                print(f"⚠️ OpenAI exception: {type(e).__name__}: {e}")
+        
+        # ===== Keduanya gagal =====
         return ModelResponse(
             answer=(
-                "Maaf, saat ini sistem sedang mengalami kendala "
-                "dalam menghasilkan jawaban. "
-                "Silakan coba beberapa saat lagi."
+                "Maaf, saat ini sistem sedang mengalami kendala dalam menghasilkan "
+                "jawaban. Silakan coba beberapa saat lagi."
             ),
             sources=sources,
             table=table,
-            meta={
-                **meta,
-                "fallback_failed": True,
-                "model_used": "failed",
-            },
+            meta={**meta, "fallback_failed": True, "model_used": "failed"},
             success=False
         )
+    
+    # async def _generate_with_fallback(
+    #     self,
+    #     question: str,
+    #     context_text: str,
+    #     sources: List[Source],
+    #     meta: Dict,
+    #     chat_history: Optional[List[Dict]],
+    #     table: Optional[Dict] = None
+    # ) -> ModelResponse:
+
+    #     # ============================================================
+    #     # TEST OPENAI DULU
+    #     # ============================================================
+
+    #     openai = self._get_openai()
+
+    #     if openai:
+    #         try:
+    #             print("🧪 TEST MODE: mencoba OpenAI...")
+
+    #             response = await openai.generate_response(
+    #                 question=question,
+    #                 chat_history=chat_history,
+    #                 context=context_text
+    #             )
+
+    #             if response.success:
+    #                 print("✅ OpenAI berhasil")
+
+    #                 response.sources = sources
+    #                 response.table = table
+
+    #                 response.meta = {
+    #                     **meta,
+    #                     "model_used": "openai",
+    #                     "test_mode": True,
+    #                 }
+
+    #                 return response
+
+    #             else:
+    #                 print(
+    #                     f"⚠️ OpenAI gagal: {response.error}"
+    #                 )
+
+    #         except Exception as e:
+    #             print(
+    #                 f"⚠️ OpenAI exception: "
+    #                 f"{type(e).__name__}: {e}"
+    #             )
+
+    #     else:
+    #         print(
+    #             "⚠️ OpenAI tidak aktif / OPENAI_API_KEY tidak ditemukan"
+    #         )
+
+    #     # ============================================================
+    #     # FALLBACK KE GEMINI SAAT TEST OPENAI GAGAL
+    #     # ============================================================
+
+    #     gemini = self._get_gemini()
+
+    #     if gemini:
+    #         try:
+    #             print(
+    #                 "🔄 OpenAI gagal/tidak aktif, mencoba Gemini..."
+    #             )
+
+    #             response = await gemini.generate_response(
+    #                 question=question,
+    #                 chat_history=chat_history,
+    #                 context=context_text
+    #             )
+
+    #             if response.success:
+    #                 print("✅ Gemini berhasil")
+
+    #                 response.sources = sources
+    #                 response.table = table
+
+    #                 response.meta = {
+    #                     **meta,
+    #                     "model_used": "gemini",
+    #                     "fallback": True,
+    #                 }
+
+    #                 return response
+
+    #             else:
+    #                 print(
+    #                     f"⚠️ Gemini gagal: {response.error}"
+    #                 )
+
+    #         except Exception as e:
+    #             print(
+    #                 f"⚠️ Gemini exception: "
+    #                 f"{type(e).__name__}: {e}"
+    #             )
+
+    #     # ============================================================
+    #     # KEDUANYA GAGAL
+    #     # ============================================================
+
+    #     return ModelResponse(
+    #         answer=(
+    #             "Maaf, saat ini sistem sedang mengalami kendala "
+    #             "dalam menghasilkan jawaban. "
+    #             "Silakan coba beberapa saat lagi."
+    #         ),
+    #         sources=sources,
+    #         table=table,
+    #         meta={
+    #             **meta,
+    #             "fallback_failed": True,
+    #             "model_used": "failed",
+    #         },
+    #         success=False
+    #     )

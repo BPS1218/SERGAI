@@ -1281,6 +1281,34 @@ function buildTableHtml(table) {
   html += "</tbody>" + "</table>" + "</div>";
 
   // ========================================================
+  // KETERANGAN SIMBOL YANG BENAR-BENAR MUNCUL
+  // ========================================================
+  const symbolNotes = Array.isArray(table.symbol_notes)
+    ? table.symbol_notes
+    : [];
+
+  if (symbolNotes.length > 0) {
+    html +=
+      '<div class="table-symbol-notes">' +
+      '<div class="table-symbol-notes-title"><strong>Keterangan:</strong></div>';
+
+    symbolNotes.forEach((item) => {
+      html +=
+        '<div class="table-symbol-note-item">' +
+        '<span class="table-symbol-code">' +
+        escapeHtml(item.symbol || "") +
+        "</span>" +
+        " : " +
+        '<span class="table-symbol-meaning">' +
+        escapeHtml(item.meaning || "") +
+        "</span>" +
+        "</div>";
+    });
+
+    html += "</div>";
+  }
+
+  // ========================================================
   // META TABEL
   // ========================================================
   // table.source TIDAK ditampilkan lagi.

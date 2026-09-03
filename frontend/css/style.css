@@ -1907,3 +1907,97 @@ button,
     font-size: 10px;
   }
 }
+
+/* =====================================================
+   FIX TABEL RESPONSIF SERGAI
+   ===================================================== */
+
+@media (max-width: 768px) {
+  /* Pesan bot boleh memakai ruang yang tersedia */
+  .message.bot {
+    width: 100%;
+    max-width: 100% !important;
+    align-items: flex-start;
+  }
+
+  /* INI KUNCI UTAMANYA */
+  .message.bot .message-content {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: calc(100% - 50px);
+  }
+
+  .message.bot .bubble {
+    width: 100%;
+    max-width: 100% !important;
+    min-width: 0;
+  }
+
+  /* Card tabel mengikuti lebar bubble */
+  .message.bot .table-card-inner {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 8px;
+  }
+
+  /* Judul + tombol unduh jangan memaksa lebar */
+  .table-header {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .table-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Hanya bagian tabel yang boleh digeser */
+  .table-scroll {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto !important;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Tabel boleh lebih lebar dari layar,
+     tetapi tetap berada di dalam scroll */
+  .data-table,
+  .data-table.has-multi-header {
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .table-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .table-title {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .table-download-btn {
+    align-self: flex-start;
+    width: auto;
+    margin: 0;
+  }
+}

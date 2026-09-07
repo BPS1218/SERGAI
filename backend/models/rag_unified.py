@@ -162,13 +162,25 @@ class RAGUnifiedModel(BaseModel):
 
         keywords = []
 
-        for word in q.split():
+        words = q.split()
+
+        for i, word in enumerate(words):
             if word in stopwords:
                 continue
 
-            # tetap izinkan singkatan:
-            # IPM, TPT, PDRB, dll
+            # Kata normal minimal 2 karakter
             if len(word) >= 2:
+                keywords.append(word)
+                continue
+
+            # Pertahankan kode 1 huruf setelah SIM:
+            # SIM A, SIM B, SIM C, dll.
+            if (
+                len(word) == 1
+                and i > 0
+                and words[i - 1] == "sim"
+                and word.isalpha()
+            ):
                 keywords.append(word)
 
         return keywords
@@ -218,6 +230,22 @@ class RAGUnifiedModel(BaseModel):
 
         query_normalized = self._normalize_search_text(
             question
+        )
+        # Bersihkan kata perintah agar tidak mengganggu exact match
+        exact_stopwords = {
+            "tabel",
+            "tampilkan",
+            "tolong",
+            "lihat",
+            "cari",
+            "minta",
+            "data",
+        }
+
+        query_for_exact = " ".join(
+            word
+            for word in query_normalized.split()
+            if word not in exact_stopwords
         )
 
         title_normalized = self._normalize_search_text(
@@ -269,10 +297,10 @@ class RAGUnifiedModel(BaseModel):
         # ==========================================
 
         exact = (
-            query_normalized == title_normalized
+            query_for_exact == title_normalized
             or (
                 short_normalized
-                and query_normalized == short_normalized
+                and query_for_exact == short_normalized
             )
         )
 
@@ -284,15 +312,15 @@ class RAGUnifiedModel(BaseModel):
         # ==========================================
 
         if (
-            query_normalized
-            and query_normalized in title_normalized
+            query_for_exact
+            and query_for_exact in title_normalized
         ):
             score += 35
 
         if (
             short_normalized
-            and query_normalized
-            and query_normalized in short_normalized
+            and query_for_exact
+            and query_for_exact in short_normalized
         ):
             score += 35
 
@@ -1050,7 +1078,18 @@ class RAGUnifiedModel(BaseModel):
                 "kamu siapa", "bisa bantu", "test", "apa kabar",
                 "terima kasih", "makasih", "thanks"
             ]
-            if len(q_lower) < 60 and any(kw in q_lower for kw in conversational_keywords):
+            q_words = set(re.findall(r"\b\w+\b", q_lower))
+
+            is_conversational = any(
+                (
+                    kw in q_words
+                    if " " not in kw
+                    else kw in q_lower
+                )
+                for kw in conversational_keywords
+            )
+
+            if len(q_lower) < 60 and is_conversational:
                 return ModelResponse(
                     answer=(
                         "Halo! 👋 Saya adalah **sergAI** (Smart Engagement for "
@@ -1079,11 +1118,25 @@ class RAGUnifiedModel(BaseModel):
                 "telepon", "media sosial", "unduh", "download",
                 "pst", "pelayanan statistik",
                 "link", "url", "website", "situs",
-                "tabel statistik", "publikasi", "buku", "download publikasi",
+                "tabel statistik", "publikasi", "download publikasi",
                 "brs", "berita resmi", "siaran pers", "berita",
                 "metadata", "sirusa", "indikator", "definisi lengkap"
             ]
-            if len(q_lower) < 120 and any(kw in q_lower for kw in info_keywords):
+            q_words = set(re.findall(r"\b\w+\b", q_lower))
+
+            is_info_query = any(
+                (
+                    kw in q_words
+                    if " " not in kw
+                    else re.search(
+                        r"\b" + re.escape(kw) + r"\b",
+                        q_lower
+                    )
+                )
+                for kw in info_keywords
+            )
+
+            if len(q_lower) < 120 and is_info_query:
                 return await self._generate_with_fallback(
                     question=question,
                     context_text=(
@@ -1856,6 +1909,14 @@ class RAGUnifiedModel(BaseModel):
 
             for group in groups:
 
+                # Exact match terhadap query jangan digabung
+                # dengan kandidat lain yang hanya mirip.
+                if (
+                    candidate.get("exact")
+                    or group.get("exact")
+                ):
+                    continue
+
                 similarity = self._title_similarity(
                     candidate["title"],
                     group["title"],
@@ -2101,35 +2162,46 @@ class RAGUnifiedModel(BaseModel):
         title: str = "",
         sheet_name: str = "",
     ) -> Optional[str]:
+
         years = []
 
-        years.extend(self._extract_years_from_text(title))
-        years.extend(self._extract_years_from_text(sheet_name))
+        # Prioritaskan metadata tabel,
+        # bukan teks sumber/catatan.
+        years.extend(
+            self._extract_years_from_text(title)
+        )
+
+        years.extend(
+            self._extract_years_from_text(sheet_name)
+        )
+
         years.extend(
             self._extract_years_from_text(
                 df.attrs.get("sheet_title", "")
             )
         )
-        years.extend(
-            self._extract_years_from_text(
-                df.attrs.get("source_note", "")
-            )
-        )
 
-        for year in df.attrs.get("raw_years", []):
-            try:
-                years.append(int(year))
-            except (TypeError, ValueError):
-                pass
-
+        # Tahun pada header kolom
         for column in df.columns:
-            years.extend(self._extract_years_from_text(str(column)))
+            years.extend(
+                self._extract_years_from_text(
+                    str(column)
+                )
+            )
 
+        # Tahun yang benar-benar muncul di isi tabel
         sample = df.head(200)
 
         for column in sample.columns:
-            for value in sample[column].dropna().astype(str).tolist():
-                years.extend(self._extract_years_from_text(value))
+            for value in (
+                sample[column]
+                .dropna()
+                .astype(str)
+                .tolist()
+            ):
+                years.extend(
+                    self._extract_years_from_text(value)
+                )
 
         return str(max(years)) if years else None
 
@@ -3193,8 +3265,45 @@ class RAGUnifiedModel(BaseModel):
             )
         )
 
-    def _looks_like_priority_data_row(self, row_values: List[str]) -> bool:
-        values = [self._priority_cell_text(v) for v in row_values]
+    def _looks_like_priority_year_header_row(
+        self,
+        row_values: List[str],
+    ) -> bool:
+        """
+        Deteksi baris header yang berisi kelompok tahun.
+
+        Contoh:
+        Bulan | 2023 | "" | 2024 | "" | 2025 | ""
+        """
+        values = [
+            self._priority_cell_text(v)
+            for v in row_values
+        ]
+
+        nonempty = [v for v in values if v]
+
+        if len(nonempty) < 2:
+            return False
+
+        year_values = []
+
+        for value in values[1:]:
+            if re.fullmatch(r"(?:19|20)\d{2}", value):
+                year_values.append(value)
+
+        # Minimal dua tahun agar tidak mudah
+        # salah menganggap baris data sebagai header.
+        return len(year_values) >= 2
+
+    def _looks_like_priority_data_row(
+        self,
+        row_values: List[str],
+    ) -> bool:
+        values = [
+            self._priority_cell_text(v)
+            for v in row_values
+        ]
+
         nonempty = [v for v in values if v]
 
         if len(nonempty) < 2:
@@ -3204,6 +3313,11 @@ class RAGUnifiedModel(BaseModel):
             return False
 
         if self._is_priority_footer_row(values):
+            return False
+
+        # Header bertingkat dengan kelompok tahun
+        # tidak boleh dianggap sebagai data.
+        if self._looks_like_priority_year_header_row(values):
             return False
 
         numeric_after_first = sum(
@@ -3432,67 +3546,126 @@ class RAGUnifiedModel(BaseModel):
         column_count: int,
     ) -> List[str]:
         """
-        Bentuk header akhir dari header bertingkat.
+        Bentuk nama kolom DataFrame dari header bertingkat.
 
-        Contoh:
-        Sekolah / Schools
-            Negeri / Public
-            Swasta / Private
-            Jumlah / Total
-
-        menjadi:
-        Sekolah - Negeri
-        Sekolah - Swasta
-        Sekolah - Jumlah
+        Header final harus konsisten dengan struktur
+        colspan/rowspan yang dikirim ke frontend.
         """
+
         if not header_rows:
             return [
                 f"Kolom {i + 1}"
                 for i in range(column_count)
             ]
 
-        # Parent/group header di-expand mengikuti merged cell.
-        expanded_rows = [
-            self._expand_merged_priority_header_row(row)
-            for row in header_rows
+        structure = (
+            self._build_priority_header_structure(
+                header_rows=header_rows,
+                column_count=column_count,
+            )
+        )
+
+        if not structure:
+            return [
+                f"Kolom {i + 1}"
+                for i in range(column_count)
+            ]
+
+        # Setiap kolom fisik menyimpan label
+        # dari level header yang menaunginya.
+        column_parts = [
+            []
+            for _ in range(column_count)
         ]
+
+        occupied = [
+            [False] * column_count
+            for _ in range(len(structure))
+        ]
+
+        for row_index, header_row in enumerate(
+            structure
+        ):
+            column_index = 0
+
+            for cell in header_row:
+
+                # Cari kolom pertama yang belum terisi
+                # pada level header ini.
+                while (
+                    column_index < column_count
+                    and occupied[row_index][column_index]
+                ):
+                    column_index += 1
+
+                if column_index >= column_count:
+                    break
+
+                label = self._priority_cell_text(
+                    cell.get("label", "")
+                )
+
+                colspan = max(
+                    1,
+                    int(cell.get("colspan", 1))
+                )
+
+                rowspan = max(
+                    1,
+                    int(cell.get("rowspan", 1))
+                )
+
+                # Label berlaku untuk semua kolom
+                # yang dicakup oleh colspan.
+                for c in range(
+                    column_index,
+                    min(
+                        column_index + colspan,
+                        column_count,
+                    ),
+                ):
+                    if (
+                        label
+                        and label
+                        not in column_parts[c]
+                    ):
+                        column_parts[c].append(
+                            label
+                        )
+
+                # Tandai area yang tertutup rowspan.
+                for r in range(
+                    row_index,
+                    min(
+                        row_index + rowspan,
+                        len(structure),
+                    ),
+                ):
+                    for c in range(
+                        column_index,
+                        min(
+                            column_index + colspan,
+                            column_count,
+                        ),
+                    ):
+                        occupied[r][c] = True
+
+                column_index += colspan
 
         headers = []
 
-        for column_index in range(column_count):
-            parts = []
-
-            for row_values in expanded_rows:
-                if column_index >= len(row_values):
-                    continue
-
-                value = self._priority_cell_text(
-                    row_values[column_index]
-                )
-
-                if not value:
-                    continue
-
-                cleaned = self._clean_priority_header_label(
-                    value,
-                    column_index
-                )
-
-                # Hindari label sama berulang.
-                if (
-                    cleaned
-                    and cleaned not in parts
-                    and not cleaned.startswith("Kolom ")
-                ):
-                    parts.append(cleaned)
-
+        for column_index, parts in enumerate(
+            column_parts
+        ):
             if not parts:
-                header = f"Kolom {column_index + 1}"
+                header = (
+                    f"Kolom {column_index + 1}"
+                )
+
             elif len(parts) == 1:
                 header = parts[0]
+
             else:
-                # Untuk kolom pertama biasanya parent dan child sama/bermakna sama.
-                # Untuk kolom lain, gabungkan group + subheader.
                 header = " - ".join(parts)
 
             headers.append(header)
@@ -3524,9 +3697,27 @@ class RAGUnifiedModel(BaseModel):
         header_rows: List[List[str]],
         column_count: int,
     ) -> List[List[Dict]]:
-        """Bentuk header bertingkat dengan colspan/rowspan untuk frontend."""
+        """
+        Bentuk header bertingkat dengan colspan/rowspan untuk frontend.
+
+        Menangani pola umum seperti:
+
+        Nama Perusahaan | Jumlah Armada
+                        | 2023 | 2024 | 2025
+
+        menjadi:
+
+        Nama Perusahaan        -> rowspan 2
+        Jumlah Armada          -> colspan 3
+        2023 | 2024 | 2025
+        """
+
         if not header_rows:
             return []
+
+        # ========================================================
+        # RAW MATRIX
+        # ========================================================
 
         raw_matrix = []
 
@@ -3538,80 +3729,261 @@ class RAGUnifiedModel(BaseModel):
                 for i in range(column_count)
             ])
 
+        row_count = len(raw_matrix)
+
+        # ========================================================
+        # KHUSUS POLA:
+        #
+        # A | B |   |  
+        #   | C | D | E
+        #
+        # A = stub/label utama -> rowspan
+        # B = group header -> colspan seluruh kolom sisanya
+        #
+        # Contoh:
+        # Nama Perusahaan | Jumlah Armada |   |
+        #                 | 2023          | 2024 | 2025
+        # ========================================================
+
+        if (
+            row_count == 2
+            and column_count >= 3
+        ):
+            top_row = raw_matrix[0]
+            second_row = raw_matrix[1]
+
+            top_nonempty_indexes = [
+                i
+                for i, value in enumerate(top_row)
+                if self._priority_cell_text(value)
+            ]
+
+            second_nonempty_after_first = [
+                i
+                for i in range(1, column_count)
+                if self._priority_cell_text(
+                    second_row[i]
+                )
+            ]
+
+            first_top = self._priority_cell_text(
+                top_row[0]
+            )
+
+            first_second = self._priority_cell_text(
+                second_row[0]
+            )
+
+            # Kondisi:
+            # - header pertama ada
+            # - bawah header pertama kosong
+            # - hanya ada 2 kelompok utama pada baris atas
+            # - kolom 2 dst mempunyai subheader
+            if (
+                first_top
+                and not first_second
+                and len(top_nonempty_indexes) == 2
+                and len(second_nonempty_after_first) >= 2
+            ):
+                # Label group selain kolom pertama.
+                group_index = top_nonempty_indexes[1]
+
+                group_label = (
+                    self._clean_priority_header_label(
+                        top_row[group_index],
+                        group_index,
+                    )
+                )
+
+                first_label = (
+                    self._clean_priority_header_label(
+                        first_top,
+                        0,
+                    )
+                )
+
+                first_header_row = [
+                    {
+                        "label": first_label,
+                        "colspan": 1,
+                        "rowspan": 2,
+                    },
+                    {
+                        "label": group_label,
+                        "colspan": column_count - 1,
+                        "rowspan": 1,
+                    },
+                ]
+
+                second_header_row = []
+
+                for column_index in range(
+                    1,
+                    column_count,
+                ):
+                    value = self._priority_cell_text(
+                        second_row[column_index]
+                    )
+
+                    if not value:
+                        continue
+
+                    label = (
+                        self._clean_priority_header_label(
+                            value,
+                            column_index,
+                        )
+                    )
+
+                    second_header_row.append({
+                        "label": label,
+                        "colspan": 1,
+                        "rowspan": 1,
+                    })
+
+                return [
+                    first_header_row,
+                    second_header_row,
+                ]
+
+        # ========================================================
+        # POLA HEADER UMUM
+        # ========================================================
+
         expanded_matrix = [
-            self._expand_merged_priority_header_row(row)
+            self._expand_merged_priority_header_row(
+                row
+            )
             for row in raw_matrix
         ]
 
         cleaned_matrix = []
 
         for row in expanded_matrix:
+
             cleaned_row = []
 
             for column_index, value in enumerate(row):
+
                 cleaned_row.append(
                     self._clean_priority_header_label(
                         value,
-                        column_index
+                        column_index,
                     )
                     if value
                     else ""
                 )
 
-            cleaned_matrix.append(cleaned_row)
+            cleaned_matrix.append(
+                cleaned_row
+            )
+
+        # ========================================================
+        # BENTUK COLSPAN / ROWSPAN
+        # ========================================================
 
         structure = []
-        row_count = len(raw_matrix)
-        covered_until = [-1] * column_count
+
+        covered_until = [
+            -1
+        ] * column_count
 
         for row_index in range(row_count):
+
             cells = []
+
             column_index = 0
 
             while column_index < column_count:
-                if covered_until[column_index] >= row_index:
+
+                if (
+                    covered_until[column_index]
+                    >= row_index
+                ):
                     column_index += 1
                     continue
 
-                label = cleaned_matrix[row_index][column_index]
+                label = (
+                    cleaned_matrix[
+                        row_index
+                    ][column_index]
+                )
 
                 if not label:
                     column_index += 1
                     continue
 
+                # ================================================
+                # COLSPAN
+                # ================================================
+
                 colspan = 1
 
                 while (
-                    column_index + colspan < column_count
-                    and cleaned_matrix[row_index][column_index + colspan] == label
-                    and raw_matrix[row_index][column_index + colspan] == ""
-                    and covered_until[column_index + colspan] < row_index
+                    column_index + colspan
+                    < column_count
+
+                    and cleaned_matrix[
+                        row_index
+                    ][
+                        column_index
+                        + colspan
+                    ] == label
+
+                    and raw_matrix[
+                        row_index
+                    ][
+                        column_index
+                        + colspan
+                    ] == ""
+
+                    and covered_until[
+                        column_index
+                        + colspan
+                    ] < row_index
                 ):
                     colspan += 1
 
+                # ================================================
+                # ROWSPAN
+                # ================================================
+
                 rowspan = 1
 
-                for next_row in range(row_index + 1, row_count):
+                for next_row in range(
+                    row_index + 1,
+                    row_count,
+                ):
+
                     if all(
                         self._priority_cell_text(
-                            raw_matrix[next_row][c]
+                            raw_matrix[
+                                next_row
+                            ][c]
                         ) == ""
+
                         for c in range(
                             column_index,
-                            column_index + colspan
+                            column_index
+                            + colspan,
                         )
                     ):
                         rowspan += 1
+
                     else:
                         break
 
                 if rowspan > 1:
+
                     for c in range(
                         column_index,
-                        column_index + colspan
+                        column_index
+                        + colspan,
                     ):
                         covered_until[c] = (
-                            row_index + rowspan - 1
+                            row_index
+                            + rowspan
+                            - 1
                         )
 
                 cells.append({
@@ -3623,7 +3995,9 @@ class RAGUnifiedModel(BaseModel):
                 column_index += colspan
 
             if cells:
-                structure.append(cells)
+                structure.append(
+                    cells
+                )
 
         return structure
 
@@ -3904,19 +4278,52 @@ class RAGUnifiedModel(BaseModel):
             result.attrs["raw_years"] = raw_years
             return result
 
+
         # cari awal data
         data_start = None
+        numbering_row_index = None
 
+        # 1. Prioritaskan baris nomor kolom seperti:
+        # (1) | (2) | (3) | ...
         for index in range(min(len(work), 15)):
             row_values = [
                 self._priority_cell_text(v)
                 for v in work.iloc[index].tolist()
             ]
 
-            if self._looks_like_priority_data_row(row_values):
-                data_start = index
+            if self._is_priority_numbering_row(row_values):
+                numbering_row_index = index
                 break
 
+        # Jika ada numbering row, baris nonkosong berikutnya
+        # dianggap sebagai awal data.
+        if numbering_row_index is not None:
+            for index in range(numbering_row_index + 1, len(work)):
+                row_values = [
+                    self._priority_cell_text(v)
+                    for v in work.iloc[index].tolist()
+                ]
+
+                if (
+                    any(row_values)
+                    and not self._is_priority_footer_row(row_values)
+                ):
+                    data_start = index
+                    break
+
+        # 2. Jika tidak ada numbering row, gunakan deteksi data biasa.
+        if data_start is None:
+            for index in range(min(len(work), 15)):
+                row_values = [
+                    self._priority_cell_text(v)
+                    for v in work.iloc[index].tolist()
+                ]
+
+                if self._looks_like_priority_data_row(row_values):
+                    data_start = index
+                    break
+
+        # 3. Fallback terakhir
         if data_start is None:
             data_start = 1 if len(work) > 1 else 0
 
@@ -3944,6 +4351,13 @@ class RAGUnifiedModel(BaseModel):
             header_rows=header_rows,
             column_count=work.shape[1],
         )
+
+        print("🧩 RAW HEADER ROWS:")
+        for row in header_rows:
+            print(row)
+
+        print("🧩 HEADER STRUCTURE:")
+        print(header_structure)
 
         header_matrix = self._build_priority_header_matrix(
             header_rows=header_rows,
@@ -4222,7 +4636,7 @@ class RAGUnifiedModel(BaseModel):
             "source": source,
             "columns": [str(column) for column in df.columns],
             "rows": rows,
-            "total_rows": int(len(df))
+            "total_rows": int(len(df)),
         }
 
         source_note = str(df.attrs.get("source_note", "")).strip()

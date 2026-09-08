@@ -62,6 +62,11 @@ class RAGUnifiedModel(BaseModel):
         # ===== Spreadsheet IDs =====
         self.db_sheet_id = settings.database_spreadsheet_id
         self.rekap_sheet_id = settings.rekap_spreadsheet_id
+
+        # ===== Google Apps Script: metadata format Sheet =====
+        self.google_script_url = settings.google_script_url
+        self._sheet_format_cache = {}
+
       # ===== Candidate matching =====
         self.max_candidate_choices = 10
 
@@ -4170,9 +4175,188 @@ class RAGUnifiedModel(BaseModel):
 
         return spans
 
+    def _map_priority_body_format_metadata(
+        self,
+        format_metadata: Optional[Dict],
+        body_raw_rows: List[int],
+        body_raw_columns: List[int],
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Ubah koordinat RAW Google Sheet menjadi koordinat
+        tabel body hasil normalisasi SERGAI.
+
+        Return:
+        - body_merges
+        - body_bold_cells
+
+        Header, judul, numbering row, footer, dan sumber
+        otomatis tidak ikut karena tidak terdapat dalam
+        body_raw_rows.
+        """
+
+        if not format_metadata:
+            return [], []
+
+        raw_row_to_body = {
+            raw_row: body_row
+            for body_row, raw_row
+            in enumerate(body_raw_rows)
+        }
+
+        raw_col_to_body = {
+            raw_col: body_col
+            for body_col, raw_col
+            in enumerate(body_raw_columns)
+        }
+
+        body_merges = []
+        body_bold_cells = []
+
+        # ======================================================
+        # MERGE BODY
+        # ======================================================
+
+        for item in format_metadata.get(
+            "merges",
+            []
+        ):
+            try:
+                raw_row = int(item.get("row"))
+                raw_col = int(item.get("col"))
+
+                raw_rowspan = max(
+                    1,
+                    int(item.get("rowspan", 1))
+                )
+
+                raw_colspan = max(
+                    1,
+                    int(item.get("colspan", 1))
+                )
+            except Exception:
+                continue
+
+            # Merge dimulai di luar body -> abaikan.
+            if (
+                raw_row not in raw_row_to_body
+                or raw_col not in raw_col_to_body
+            ):
+                continue
+
+            raw_rows = list(
+                range(
+                    raw_row,
+                    raw_row + raw_rowspan
+                )
+            )
+
+            raw_cols = list(
+                range(
+                    raw_col,
+                    raw_col + raw_colspan
+                )
+            )
+
+            # Merge hanya diterima jika semua sel merge
+            # masih ada setelah normalisasi.
+            if not all(
+                row in raw_row_to_body
+                for row in raw_rows
+            ):
+                continue
+
+            if not all(
+                col in raw_col_to_body
+                for col in raw_cols
+            ):
+                continue
+
+            mapped_rows = [
+                raw_row_to_body[row]
+                for row in raw_rows
+            ]
+
+            mapped_cols = [
+                raw_col_to_body[col]
+                for col in raw_cols
+            ]
+
+            # Pastikan posisi hasil mapping tetap berurutan.
+            if mapped_rows != list(
+                range(
+                    mapped_rows[0],
+                    mapped_rows[0] + len(mapped_rows)
+                )
+            ):
+                continue
+
+            if mapped_cols != list(
+                range(
+                    mapped_cols[0],
+                    mapped_cols[0] + len(mapped_cols)
+                )
+            ):
+                continue
+
+            body_merges.append({
+                "row": mapped_rows[0],
+                "col": mapped_cols[0],
+                "rowspan": len(mapped_rows),
+                "colspan": len(mapped_cols),
+                "value": str(
+                    item.get("value", "")
+                ),
+            })
+
+        # ======================================================
+        # BOLD BODY
+        # ======================================================
+
+        seen_bold = set()
+
+        for item in format_metadata.get(
+            "bold_cells",
+            []
+        ):
+            try:
+                raw_row = int(item.get("row"))
+                raw_col = int(item.get("col"))
+            except Exception:
+                continue
+
+            if (
+                raw_row not in raw_row_to_body
+                or raw_col not in raw_col_to_body
+            ):
+                continue
+
+            body_row = raw_row_to_body[raw_row]
+            body_col = raw_col_to_body[raw_col]
+
+            key = (
+                body_row,
+                body_col,
+            )
+
+            if key in seen_bold:
+                continue
+
+            seen_bold.add(key)
+
+            body_bold_cells.append({
+                "row": body_row,
+                "col": body_col,
+            })
+
+        return (
+            body_merges,
+            body_bold_cells,
+        )
+
     def _normalize_priority_sheet(
         self,
         raw_df: pd.DataFrame,
+        format_metadata: Optional[Dict] = None,
     ) -> pd.DataFrame:
         """
         Normalisasi sheet prioritas:
@@ -4218,7 +4402,7 @@ class RAGUnifiedModel(BaseModel):
                 ),
                 axis=0
             )
-        ].reset_index(drop=True)
+        ]
 
         raw_values = [
             self._priority_cell_text(v)
@@ -4242,7 +4426,7 @@ class RAGUnifiedModel(BaseModel):
             and not self._looks_like_priority_data_row(first_row)
         ):
             sheet_title = first_nonempty[0]
-            work = work.iloc[1:].reset_index(drop=True)
+            work = work.iloc[1:]
 
         if work.empty:
             result = pd.DataFrame()
@@ -4268,7 +4452,7 @@ class RAGUnifiedModel(BaseModel):
 
             keep_rows.append(index)
 
-        work = work.loc[keep_rows].reset_index(drop=True)
+        work = work.loc[keep_rows]
         source_note = " | ".join(dict.fromkeys(source_notes))
 
         if work.empty:
@@ -4367,7 +4551,11 @@ class RAGUnifiedModel(BaseModel):
         # data
         cleaned_rows = []
 
-        for _, row in data_area.iterrows():
+        # Nomor baris asli Google Sheet untuk setiap
+        # baris yang berhasil masuk ke tabel final.
+        cleaned_row_origins = []
+
+        for raw_row_index, row in data_area.iterrows():
             row_values = [
                 self._priority_cell_text(v)
                 for v in row.tolist()
@@ -4387,20 +4575,48 @@ class RAGUnifiedModel(BaseModel):
 
             cleaned_rows.append(row_values)
 
+            cleaned_row_origins.append(
+                int(raw_row_index)
+)
+
         source_note = " | ".join(dict.fromkeys(source_notes))
 
-        result = pd.DataFrame(cleaned_rows, columns=headers)
+        body_original_columns = [
+            int(column)
+            for column in work.columns
+        ]
+
+        result = pd.DataFrame(
+            cleaned_rows,
+            columns=headers
+        )
 
         if not result.empty:
-            result = result.loc[
-                :,
-                ~result.apply(
-                    lambda col: all(
-                        self._priority_cell_text(v) == ""
-                        for v in col
-                    ),
-                    axis=0
+            body_column_keep_mask = [
+                not all(
+                    self._priority_cell_text(v) == ""
+                    for v in result.iloc[:, column_index].tolist()
                 )
+                for column_index in range(
+                    result.shape[1]
+                )
+            ]
+
+            kept_column_positions = [
+                index
+                for index, keep
+                in enumerate(body_column_keep_mask)
+                if keep
+            ]
+
+            result = result.iloc[
+                :,
+                kept_column_positions
+            ]
+
+            body_original_columns = [
+                body_original_columns[index]
+                for index in kept_column_positions
             ]
 
         result = result.reset_index(drop=True)
@@ -4410,11 +4626,33 @@ class RAGUnifiedModel(BaseModel):
         result.attrs["raw_years"] = raw_years
         result.attrs["header_rows"] = header_structure
         result.attrs["header_matrix"] = header_matrix
-        result.attrs["body_rowspans"] = (
-            self._build_priority_body_rowspans(
-                result
+        body_merges, body_bold_cells = (
+            self._map_priority_body_format_metadata(
+                format_metadata=format_metadata,
+                body_raw_rows=cleaned_row_origins,
+                body_raw_columns=body_original_columns,
             )
         )
+
+        if format_metadata:
+            # Metadata fisik Google Sheet tersedia.
+            # Jangan lagi menebak merge dari sel kosong.
+            result.attrs["body_format_metadata_loaded"] = True
+            result.attrs["body_merges"] = body_merges
+            result.attrs["body_bold_cells"] = body_bold_cells
+            result.attrs["body_rowspans"] = []
+
+        else:
+            # Fallback lama jika Apps Script tidak dapat diakses.
+            result.attrs["body_format_metadata_loaded"] = False
+            result.attrs["body_merges"] = []
+            result.attrs["body_bold_cells"] = []
+
+            result.attrs["body_rowspans"] = (
+                self._build_priority_body_rowspans(
+                    result
+                )
+            )
 
         print(
             "🧹 Priority sheet normalized:",
@@ -4425,6 +4663,103 @@ class RAGUnifiedModel(BaseModel):
         )
 
         return result
+
+    async def _fetch_sheet_format_metadata(
+        self,
+        spreadsheet_id: str,
+        gid: str,
+    ) -> Optional[Dict]:
+        """
+        Ambil metadata format Google Sheet melalui Apps Script.
+
+        Metadata yang dibaca:
+        - merged cells
+        - bold cells
+
+        Koordinat dari Apps Script masih menggunakan posisi RAW sheet
+        (0-based), belum posisi tabel hasil normalisasi.
+        """
+
+        if (
+            not self.google_script_url
+            or not spreadsheet_id
+            or gid is None
+        ):
+            return None
+
+        cache_key = f"{spreadsheet_id}:{gid}"
+        now = time.time()
+
+        cached = self._sheet_format_cache.get(
+            cache_key
+        )
+
+        if (
+            cached
+            and now < cached.get("expiry", 0)
+        ):
+            return cached.get("data")
+
+        payload = {
+            "action": "get_sheet_format",
+            "spreadsheet_id": spreadsheet_id,
+            "gid": int(gid),
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=30,
+                follow_redirects=True,
+            ) as client:
+
+                response = await client.post(
+                    self.google_script_url,
+                    json=payload,
+                )
+
+                response.raise_for_status()
+
+                data = response.json()
+                print("🧪 RAW APPS SCRIPT RESPONSE:")
+                print(data)
+
+            if not isinstance(data, dict):
+                print(
+                    "⚠️ Sheet format metadata bukan object JSON"
+                )
+                return None
+
+            if not data.get("ok"):
+                print(
+                    "⚠️ Sheet format metadata gagal:",
+                    data.get("error", "unknown error"),
+                )
+                return None
+
+            self._sheet_format_cache[
+                cache_key
+            ] = {
+                "data": data,
+                "expiry": now + self.cache_ttl,
+            }
+
+            print(
+                "🎨 Sheet format metadata:",
+                f"sheet={data.get('sheet_name')!r}",
+                f"merges={len(data.get('merges', []))}",
+                f"bold={len(data.get('bold_cells', []))}",
+            )
+
+            return data
+
+        except Exception as e:
+            print(
+                "⚠️ Failed to fetch sheet format metadata:",
+                type(e).__name__,
+                e,
+            )
+
+            return None
 
     async def _fetch_sheet_csv(self, link: str) -> Optional[pd.DataFrame]:
         if not link:
@@ -4474,7 +4809,17 @@ class RAGUnifiedModel(BaseModel):
                     keep_default_na=False,
                 )
 
-                df = self._normalize_priority_sheet(raw_df)
+                format_metadata = (
+                    await self._fetch_sheet_format_metadata(
+                        spreadsheet_id=spreadsheet_id,
+                        gid=gid,
+                    )
+                )
+
+                df = self._normalize_priority_sheet(
+                    raw_df,
+                    format_metadata=format_metadata,
+                )
 
                 if df.empty:
                     print("⚠️ Priority sheet kosong setelah normalisasi")
@@ -4606,13 +4951,29 @@ class RAGUnifiedModel(BaseModel):
         source: str,
         max_rows: int = 100
     ) -> Dict:
-        """Ubah DataFrame bersih menjadi payload tabel frontend."""
+        """
+        Ubah DataFrame bersih menjadi payload tabel frontend.
+
+        Payload dapat memuat:
+        - columns
+        - rows
+        - source_note
+        - header_rows
+        - header_matrix
+        - body_rowspans           -> fallback lama
+        - body_merges             -> merge fisik dari Google Sheet
+        - body_bold_cells         -> bold fisik dari Google Sheet
+        - body_format_metadata_loaded
+        - symbol_notes
+        """
 
         def fmt(value):
             """
             Pertahankan nilai sumber apa adanya.
-            Hanya missing value nyata dari pandas yang menjadi sel kosong.
+            Hanya missing value nyata dari pandas
+            yang menjadi sel kosong.
             """
+
             if value is None:
                 return ""
 
@@ -4624,33 +4985,79 @@ class RAGUnifiedModel(BaseModel):
 
             return str(value)
 
+        # =========================================================
+        # BATASI JUMLAH BARIS YANG DIKIRIM KE FRONTEND
+        # =========================================================
+
         head = df.head(max_rows)
 
         rows = [
-            [fmt(value) for value in row]
+            [
+                fmt(value)
+                for value in row
+            ]
             for row in head.values.tolist()
         ]
+
+        # =========================================================
+        # PAYLOAD DASAR
+        # =========================================================
 
         payload = {
             "title": title,
             "source": source,
-            "columns": [str(column) for column in df.columns],
+            "columns": [
+                str(column)
+                for column in df.columns
+            ],
             "rows": rows,
             "total_rows": int(len(df)),
         }
 
-        source_note = str(df.attrs.get("source_note", "")).strip()
+        # =========================================================
+        # SUMBER ASLI DARI SHEET
+        # =========================================================
+
+        source_note = str(
+            df.attrs.get(
+                "source_note",
+                ""
+            )
+        ).strip()
 
         if source_note:
             payload["source_note"] = source_note
 
-        header_rows = df.attrs.get("header_rows", [])
+        # =========================================================
+        # HEADER BERTINGKAT
+        # =========================================================
+
+        header_rows = df.attrs.get(
+            "header_rows",
+            []
+        )
+
         if header_rows:
             payload["header_rows"] = header_rows
 
-        header_matrix = df.attrs.get("header_matrix", [])
+        # =========================================================
+        # HEADER MATRIX
+        # Dipakai terutama untuk struktur download Excel / header
+        # =========================================================
+
+        header_matrix = df.attrs.get(
+            "header_matrix",
+            []
+        )
+
         if header_matrix:
             payload["header_matrix"] = header_matrix
+
+        # =========================================================
+        # FALLBACK BODY ROWSPAN LAMA
+        # Hanya dipakai jika metadata fisik Google Sheet
+        # tidak tersedia.
+        # =========================================================
 
         body_rowspans = df.attrs.get(
             "body_rowspans",
@@ -4662,9 +5069,67 @@ class RAGUnifiedModel(BaseModel):
                 body_rowspans
             )
 
-        symbol_notes = self._detect_bps_symbol_notes(payload)
+        # =========================================================
+        # STATUS METADATA FORMAT BODY
+        # =========================================================
+
+        body_format_metadata_loaded = bool(
+            df.attrs.get(
+                "body_format_metadata_loaded",
+                False
+            )
+        )
+
+        payload[
+            "body_format_metadata_loaded"
+        ] = body_format_metadata_loaded
+
+        # =========================================================
+        # MERGE BODY ASLI GOOGLE SHEET
+        # Mendukung:
+        # - rowspan
+        # - colspan
+        # - rowspan + colspan
+        # =========================================================
+
+        body_merges = df.attrs.get(
+            "body_merges",
+            []
+        )
+
+        if body_format_metadata_loaded:
+            payload[
+                "body_merges"
+            ] = body_merges
+
+        # =========================================================
+        # BOLD CELL BODY ASLI GOOGLE SHEET
+        # =========================================================
+
+        body_bold_cells = df.attrs.get(
+            "body_bold_cells",
+            []
+        )
+
+        if body_bold_cells:
+            payload[
+                "body_bold_cells"
+            ] = body_bold_cells
+
+        # =========================================================
+        # KETERANGAN SIMBOL BPS
+        # =========================================================
+
+        symbol_notes = (
+            self._detect_bps_symbol_notes(
+                payload
+            )
+        )
+
         if symbol_notes:
-            payload["symbol_notes"] = symbol_notes
+            payload[
+                "symbol_notes"
+            ] = symbol_notes
 
         return payload
 
@@ -4736,13 +5201,16 @@ class RAGUnifiedModel(BaseModel):
             f"📋 JUDUL TABEL: {judul}{sheet_label}",
             f"📖 SUMBER UNTUK JAWABAN: {sumber}",
             "",
+            "",
             "📖 DEFINISI:",
             definisi if definisi else "(Tidak tersedia)",
             "",
             "💡 INTERPRETASI:",
-            (interpretasi if interpretasi else
-             "(Tidak tersedia — gunakan auto-interpretasi di bawah jika relevan)") +
-            auto_interpret,
+            (
+                interpretasi
+                if interpretasi
+                else "(Tidak tersedia — gunakan auto-interpretasi di bawah jika relevan)"
+            ) + auto_interpret,
             "",
             "📊 DATA TABEL:",
             "\n".join(lines)

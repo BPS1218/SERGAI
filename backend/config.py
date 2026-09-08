@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     bps_api_key: str = ""
 
+    # ===== GOOGLE APPS SCRIPT =====
+    google_script_url: str = ""
+
     # ===== MODEL (✅ ganti kapan saja via .env) =====
     gemini_model: str = "gemini-3.1-flash-lite-preview"
     openai_model: str = "gpt-5.6-luna"  # ✅ Bisa diganti tanpa ubah kode

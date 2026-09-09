@@ -344,11 +344,10 @@ function openSession(sessionId) {
           Array.isArray(meta.candidates) &&
           meta.candidates.length > 0
         ) {
-          const selectedCandidateId =
-            findSelectedCandidateIdForHistory(
-              messages,
-              index,
-            );
+          const selectedCandidateId = findSelectedCandidateIdForHistory(
+            messages,
+            index,
+          );
 
           renderCandidateChoicesHistory(
             meta.candidates,
@@ -764,7 +763,11 @@ function renderCandidateChoices(candidates, totalCandidates = 0) {
   scrollToBottom();
 }
 
-function renderCandidateChoicesHistory(candidates, totalCandidates = 0, selectedCandidateId = null) {
+function renderCandidateChoicesHistory(
+  candidates,
+  totalCandidates = 0,
+  selectedCandidateId = null,
+) {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     return;
   }
@@ -784,8 +787,7 @@ function renderCandidateChoicesHistory(candidates, totalCandidates = 0, selected
   candidates.forEach((candidate, index) => {
     const button = document.createElement("button");
     const isSelected =
-      selectedCandidateId &&
-      candidate.id === selectedCandidateId;
+      selectedCandidateId && candidate.id === selectedCandidateId;
 
     if (isSelected) {
       button.classList.add("selected");
@@ -802,9 +804,7 @@ function renderCandidateChoicesHistory(candidates, totalCandidates = 0, selected
 
     number.className = "candidate-number";
 
-    number.textContent = isSelected
-      ? "✓"
-      : String(index + 1);
+    number.textContent = isSelected ? "✓" : String(index + 1);
 
     const content = document.createElement("span");
 
@@ -850,37 +850,23 @@ function renderCandidateChoicesHistory(candidates, totalCandidates = 0, selected
   chatBox.appendChild(wrapper);
 }
 
-function findSelectedCandidateIdForHistory(
-  messages,
-  candidateMessageIndex,
-) {
-  for (
-    let i = candidateMessageIndex + 1;
-    i < messages.length;
-    i++
-  ) {
+function findSelectedCandidateIdForHistory(messages, candidateMessageIndex) {
+  for (let i = candidateMessageIndex + 1; i < messages.length; i++) {
     const nextMessage = messages[i];
 
     const nextMeta =
-      nextMessage.meta &&
-      typeof nextMessage.meta === "object"
+      nextMessage.meta && typeof nextMessage.meta === "object"
         ? nextMessage.meta
         : {};
 
     // Kalau sudah masuk candidate selection baru,
     // berarti selection sebelumnya tidak perlu dicari lagi.
-    if (
-      nextMessage.role === "bot" &&
-      nextMeta.type === "candidate_selection"
-    ) {
+    if (nextMessage.role === "bot" && nextMeta.type === "candidate_selection") {
       break;
     }
 
     // Jawaban final setelah user memilih kandidat.
-    if (
-      nextMessage.role === "bot" &&
-      nextMeta.selected_candidate_id
-    ) {
+    if (nextMessage.role === "bot" && nextMeta.selected_candidate_id) {
       return nextMeta.selected_candidate_id;
     }
   }
@@ -1105,7 +1091,13 @@ function getUserAvatarHtml() {
   if (userInfo && userInfo.picture) {
     const picture = userInfo.picture.replace(/=s\d+(?:-c)?$/i, "=s200-c");
 
-    return `<img ` + `src="${picture}" ` + `alt="" />`;
+    return (
+      `<img ` +
+      `src="${picture}" ` +
+      `alt="" ` +
+      `onerror="this.outerHTML='<i class=&quot;fas fa-user&quot;></i>'" ` +
+      `/>`
+    );
   }
 
   return '<i class="fas fa-user"></i>';
@@ -1151,13 +1143,21 @@ function buildPublicationResultsHtml(meta = {}) {
     html += '<div class="publication-cover-wrap">';
 
     if (cover) {
+      const coverProxy =
+        "/api/publication-cover?url=" + encodeURIComponent(cover);
+
       html +=
         `<img ` +
         `class="publication-cover" ` +
-        `src="${escapeHtml(cover)}" ` +
+        `src="${escapeHtml(coverProxy)}" ` +
         `alt="Cover ${title}" ` +
         `loading="lazy" ` +
-        `referrerpolicy="no-referrer">`;
+        `onerror="this.style.display='none'; ` +
+        `this.nextElementSibling.style.display='flex';">` +
+        `<div class="publication-cover-placeholder" ` +
+        `style="display:none;">` +
+        `<i class="fas fa-book-open"></i>` +
+        `</div>`;
     } else {
       html +=
         '<div class="publication-cover-placeholder">' +

@@ -1162,28 +1162,116 @@ function buildTableHtml(table) {
   const hasMultiHeader =
     Array.isArray(table.header_rows) && table.header_rows.length > 0;
 
-  const bodyRowspans = Array.isArray(table.body_rowspans)
-    ? table.body_rowspans
+  const hasPhysicalBodyMetadata =
+    table.body_format_metadata_loaded === true;
+
+  const physicalBodyMerges =
+    hasPhysicalBodyMetadata &&
+    Array.isArray(table.body_merges)
+      ? table.body_merges
+      : [];
+
+  const fallbackRowspans =
+    !hasPhysicalBodyMetadata &&
+    Array.isArray(table.body_rowspans)
+      ? table.body_rowspans
+      : [];
+
+  const bodyBoldCells = Array.isArray(
+    table.body_bold_cells
+  )
+    ? table.body_bold_cells
     : [];
 
-  const rowspanStartMap = new Map();
+  const mergeStartMap = new Map();
 
   const coveredCells = new Set();
 
-  bodyRowspans.forEach((item) => {
-    const row = Number(item.row);
+  const boldCells = new Set(
+    bodyBoldCells.map(
+      (item) =>
+        `${Number(item.row)}:${Number(item.col)}`
+    )
+  );
 
+  // ========================================================
+  // MERGE FISIK DARI GOOGLE SHEET
+  // ========================================================
+
+  physicalBodyMerges.forEach((item) => {
+    const row = Number(item.row);
     const col = Number(item.col);
 
-    const rowspan = Math.max(1, Number(item.rowspan || 1));
+    const rowspan = Math.max(
+      1,
+      Number(item.rowspan || 1)
+    );
 
-    rowspanStartMap.set(`${row}:${col}`, {
-      rowspan,
-      value: item.value,
-    });
+    const colspan = Math.max(
+      1,
+      Number(item.colspan || 1)
+    );
 
-    for (let r = row + 1; r < row + rowspan; r += 1) {
-      coveredCells.add(`${r}:${col}`);
+    mergeStartMap.set(
+      `${row}:${col}`,
+      {
+        rowspan,
+        colspan,
+        value: item.value,
+      }
+    );
+
+    for (
+      let r = row;
+      r < row + rowspan;
+      r += 1
+    ) {
+      for (
+        let c = col;
+        c < col + colspan;
+        c += 1
+      ) {
+        if (r === row && c === col) {
+          continue;
+        }
+
+        coveredCells.add(
+          `${r}:${c}`
+        );
+      }
+    }
+  });
+
+  // ========================================================
+  // FALLBACK ROWSPAN LAMA
+  // ========================================================
+
+  fallbackRowspans.forEach((item) => {
+    const row = Number(item.row);
+    const col = Number(item.col);
+
+    const rowspan = Math.max(
+      1,
+      Number(item.rowspan || 1)
+    );
+
+    mergeStartMap.set(
+      `${row}:${col}`,
+      {
+        rowspan,
+        colspan: 1,
+        value: item.value,
+      }
+    );
+
+    for (
+      let r = row + 1;
+      r < row + rowspan;
+      r += 1
+    ) {
+      coveredCells.add(
+        `${r}:${col}`
+      );
     }
   });
 
@@ -1256,22 +1344,48 @@ function buildTableHtml(table) {
         return;
       }
 
-      const spanInfo = rowspanStartMap.get(cellKey);
+      const mergeInfo =
+        mergeStartMap.get(cellKey);
 
-      const rowspan = spanInfo?.rowspan || 1;
+      const rowspan =
+        mergeInfo?.rowspan || 1;
 
-      const displayValue = spanInfo?.value ?? value;
+      const colspan =
+        mergeInfo?.colspan || 1;
 
-      const cellClass = columnIndex === 0 ? "table-row-label" : "table-value";
+      const displayValue =
+        mergeInfo?.value ?? value;
 
-      const rowspanAttr = rowspan > 1 ? ` rowspan="${rowspan}"` : "";
+      const isBold =
+        boldCells.has(cellKey);
+
+      const cellClass =
+        columnIndex === 0
+          ? "table-row-label"
+          : "table-value";
+
+      const rowspanAttr =
+        rowspan > 1
+          ? ` rowspan="${rowspan}"`
+          : "";
+
+      const colspanAttr =
+        colspan > 1
+          ? ` colspan="${colspan}"`
+          : "";
+
+      const renderedValue =
+        isBold
+          ? `<strong>${escapeHtml(displayValue)}</strong>`
+          : escapeHtml(displayValue);
 
       html +=
         `<td` +
         ` class="${cellClass}"` +
         `${rowspanAttr}` +
+        `${colspanAttr}` +
         `>` +
-        escapeHtml(displayValue) +
+        renderedValue +
         "</td>";
     });
 

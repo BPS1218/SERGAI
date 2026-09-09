@@ -33,7 +33,7 @@ Saya membantu Anda mengakses data statistik resmi secara cepat dan akurat.`,
     },
 
     // Timeout & retry
-    timeout: 45000, // 45 detik
+    timeout: 90000, // 90 detik
     maxRetries: 2,
   },
 

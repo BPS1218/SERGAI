@@ -3,18 +3,35 @@ sergAI Backend - FastAPI Server
 ✅ Alur baru: single orchestrator RAGUnifiedModel (tanpa pilihan model dari frontend)
 """
 import os
+import time
+import httpx
+
+from urllib.parse import urlparse
+
 from dotenv import load_dotenv
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_BASE, ".env"))   # muat backend/.env bila ada
+load_dotenv(os.path.join(_BASE, ".env"))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    BackgroundTasks,
+    Query,
+)
+
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+
+from fastapi.responses import (
+    FileResponse,
+    Response,
+)
+
 from fastapi.staticfiles import StaticFiles
+
 from pydantic import BaseModel, Field
+
 from typing import Optional, List, Dict
-import time
 
 from config import settings
 from models import ModelResponse
@@ -26,6 +43,75 @@ app = FastAPI(
     description="API untuk chatbot BPS Kabupaten Serdang Bedagai",
     version="2.0.0"
 )
+
+@app.get("/api/publication-cover")
+async def publication_cover_proxy(
+    url: str = Query(...),
+):
+    try:
+        parsed = urlparse(url)
+
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "webapi.bps.go.id"
+            or parsed.path != "/cover.php"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="URL cover tidak diizinkan.",
+            )
+
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "image/*,*/*;q=0.8",
+                },
+            )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail="Cover publikasi gagal diambil.",
+            )
+
+        content_type = response.headers.get(
+            "content-type",
+            "",
+        )
+
+        if not content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=502,
+                detail="Respons bukan gambar.",
+            )
+
+        return Response(
+            content=response.content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(
+            "[PUBLICATION COVER ERROR]",
+            type(exc).__name__,
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="Cover publikasi tidak dapat dimuat.",
+        )
 
 # CORS
 app.add_middleware(

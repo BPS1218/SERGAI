@@ -190,6 +190,67 @@ class RAGUnifiedModel(BaseModel):
 
         return keywords
 
+    def _build_search_terms(
+        self,
+        question: str,
+    ) -> List[str]:
+        """
+        Bentuk term pencarian yang mempertahankan frasa multi-kata.
+
+        Tujuan utama:
+        qualifier yang terdiri dari beberapa kata tidak memberi
+        penalti berlebihan pada candidate matching.
+
+        Contoh:
+        "jumlah penduduk sei rampah"
+        tetap memiliki keyword individual, tetapi juga mengenali
+        "sei rampah" sebagai satu frasa yang utuh.
+        """
+
+        keywords = self._search_keywords(question)
+
+        keywords = [
+            keyword
+            for keyword in keywords
+            if not re.fullmatch(
+                r"20\d{2}",
+                keyword,
+            )
+        ]
+
+        if not keywords:
+            return []
+
+        terms = list(keywords)
+
+        # Tambahkan bigram
+        for index in range(
+            len(keywords) - 1
+        ):
+            phrase = (
+                f"{keywords[index]} "
+                f"{keywords[index + 1]}"
+            )
+
+            if phrase not in terms:
+                terms.append(phrase)
+
+        # Tambahkan trigram agar nama/kategori 3 kata
+        # juga dapat dikenali sebagai frasa utuh.
+        for index in range(
+            len(keywords) - 2
+        ):
+            phrase = (
+                f"{keywords[index]} "
+                f"{keywords[index + 1]} "
+                f"{keywords[index + 2]}"
+            )
+
+            if phrase not in terms:
+                terms.append(phrase)
+
+        return terms
+
 
     def _candidate_id(self, title: str) -> str:
         """
@@ -233,10 +294,16 @@ class RAGUnifiedModel(BaseModel):
         short_title: str = ""
     ) -> Dict:
 
-        query_normalized = self._normalize_search_text(
-            question
+        query_normalized = (
+            self._normalize_search_text(
+                question
+            )
         )
-        # Bersihkan kata perintah agar tidak mengganggu exact match
+
+        # =========================================================
+        # EXACT MATCH
+        # =========================================================
+
         exact_stopwords = {
             "tabel",
             "tampilkan",
@@ -249,24 +316,38 @@ class RAGUnifiedModel(BaseModel):
 
         query_for_exact = " ".join(
             word
-            for word in query_normalized.split()
+            for word
+            in query_normalized.split()
             if word not in exact_stopwords
         )
 
-        title_normalized = self._normalize_search_text(
-            title
+        title_normalized = (
+            self._normalize_search_text(
+                title
+            )
         )
 
-        short_normalized = self._normalize_search_text(
-            short_title
+        short_normalized = (
+            self._normalize_search_text(
+                short_title
+            )
         )
 
-        keywords = self._search_keywords(question)
+        # =========================================================
+        # KEYWORDS
+        # =========================================================
 
-        # tahun jangan dijadikan keyword biasa
+        keywords = self._search_keywords(
+            question
+        )
+
         keywords = [
-            k for k in keywords
-            if not re.fullmatch(r"20\d{2}", k)
+            keyword
+            for keyword in keywords
+            if not re.fullmatch(
+                r"20\d{2}",
+                keyword,
+            )
         ]
 
         if not keywords:
@@ -277,63 +358,144 @@ class RAGUnifiedModel(BaseModel):
                 "exact": False,
             }
 
+        searchable_titles = [
+            title_normalized,
+        ]
+
+        if short_normalized:
+            searchable_titles.append(
+                short_normalized
+            )
+
+        # =========================================================
+        # MATCH KEYWORD INDIVIDUAL
+        # =========================================================
+
         matched_keywords = []
 
         for keyword in keywords:
 
-            if (
-                keyword in title_normalized
-                or (
-                    short_normalized
-                    and keyword in short_normalized
-                )
+            if any(
+                keyword in candidate_text
+                for candidate_text
+                in searchable_titles
             ):
-                matched_keywords.append(keyword)
+                matched_keywords.append(
+                    keyword
+                )
 
-        coverage = (
+        raw_coverage = (
             len(matched_keywords)
             / len(keywords)
         )
 
+        # =========================================================
+        # DETEKSI FRASA QUERY
+        # =========================================================
+
+        search_terms = (
+            self._build_search_terms(
+                question
+            )
+        )
+
+        phrase_terms = [
+            term
+            for term in search_terms
+            if " " in term
+        ]
+
+        matched_phrases = []
+
+        for phrase in phrase_terms:
+
+            if any(
+                phrase in candidate_text
+                for candidate_text
+                in searchable_titles
+            ):
+                matched_phrases.append(
+                    phrase
+                )
+
+        # =========================================================
+        # COVERAGE UNTUK PEMILIHAN KANDIDAT
+        # =========================================================
+        #
+        # Jika minimal dua keyword inti sudah cocok dengan judul,
+        # qualifier tambahan seperti:
+        #
+        #   sei rampah
+        #   tanjung beringin
+        #   teluk mengkudu
+        #
+        # tidak boleh membuat kandidat yang sebenarnya relevan
+        # langsung dianggap lemah.
+        #
+        # Nilai asli tetap dipertahankan jika memang lebih tinggi.
+        # =========================================================
+
+        coverage = raw_coverage
+
+        if (
+            len(keywords) >= 3
+            and len(matched_keywords) >= 2
+        ):
+            coverage = max(
+                coverage,
+                0.75,
+            )
+
+        # =========================================================
+        # SCORE
+        # =========================================================
+
         score = 0.0
 
-        # ==========================================
-        # Exact match
-        # ==========================================
-
         exact = (
-            query_for_exact == title_normalized
+            query_for_exact
+            == title_normalized
             or (
                 short_normalized
-                and query_for_exact == short_normalized
+                and query_for_exact
+                == short_normalized
             )
         )
 
         if exact:
             score += 100
 
-        # ==========================================
-        # Seluruh query muncul sebagai phrase
-        # ==========================================
-
+        # Seluruh query menjadi bagian judul.
         if (
             query_for_exact
-            and query_for_exact in title_normalized
+            and query_for_exact
+            in title_normalized
         ):
             score += 35
 
         if (
             short_normalized
             and query_for_exact
-            and query_for_exact in short_normalized
+            and query_for_exact
+            in short_normalized
         ):
             score += 35
 
-        # ==========================================
-        # Keyword match
-        # ==========================================
+        # Keyword biasa.
+        score += (
+            len(matched_keywords)
+            * 10
+        )
 
-        score += len(matched_keywords) * 10
+        # Bonus frasa persis.
+        #
+        # Ini membuat "sei rampah" lebih kuat daripada
+        # sekadar kebetulan menemukan kata "sei" dan
+        # "rampah" di posisi berbeda.
+        score += (
+            len(matched_phrases)
+            * 8
+        )
 
         if coverage == 1:
             score += 25
@@ -344,7 +506,7 @@ class RAGUnifiedModel(BaseModel):
         elif coverage >= 0.5:
             score += 5
 
-        # sedikit preferensi judul yang lebih ringkas
+        # Sedikit preferensi untuk judul ringkas.
         title_word_count = len(
             title_normalized.split()
         )
@@ -356,9 +518,18 @@ class RAGUnifiedModel(BaseModel):
             score += 2
 
         return {
-            "score": round(score, 3),
-            "coverage": round(coverage, 3),
-            "matched_keywords": matched_keywords,
+            "score": round(
+                score,
+                3
+            ),
+            "coverage": round(
+                coverage,
+                3
+            ),
+            "matched_keywords":
+                matched_keywords,
+            "matched_phrases":
+                matched_phrases,
             "exact": exact,
         }
 

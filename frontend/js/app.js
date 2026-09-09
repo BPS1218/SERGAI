@@ -84,7 +84,7 @@ function sheetPost(payload) {
     });
 }
 
-function logMessage(role, content, model = "") {
+function logMessage(role, content, model = "", meta = null, table = null) {
   if (!userInfo) {
     return;
   }
@@ -105,6 +105,10 @@ function logMessage(role, content, model = "") {
     content,
 
     model,
+
+    meta,
+
+    table,
   });
 }
 
@@ -324,8 +328,34 @@ function openSession(sessionId) {
     } else {
       emptyState.style.display = "none";
 
-      messages.forEach((message) => {
-        appendMessage(message.content, message.role);
+      messages.forEach((message, index) => {
+        const meta =
+          message.meta && typeof message.meta === "object" ? message.meta : {};
+
+        const table =
+          message.table && typeof message.table === "object"
+            ? message.table
+            : null;
+
+        appendMessage(message.content, message.role, meta, table);
+        if (
+          message.role === "bot" &&
+          meta.type === "candidate_selection" &&
+          Array.isArray(meta.candidates) &&
+          meta.candidates.length > 0
+        ) {
+          const selectedCandidateId =
+            findSelectedCandidateIdForHistory(
+              messages,
+              index,
+            );
+
+          renderCandidateChoicesHistory(
+            meta.candidates,
+            meta.candidate_count || 0,
+            selectedCandidateId,
+          );
+        }
       });
     }
 
@@ -537,10 +567,10 @@ function sendMessage() {
 
       logMessage(
         "bot",
-
         formatted.text,
-
         modelUsed + wasFallback,
+        formatted.meta,
+        apiResult.table,
       );
     })
     .catch((error) => {
@@ -734,6 +764,130 @@ function renderCandidateChoices(candidates, totalCandidates = 0) {
   scrollToBottom();
 }
 
+function renderCandidateChoicesHistory(candidates, totalCandidates = 0, selectedCandidateId = null) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return;
+  }
+
+  const wrapper = document.createElement("div");
+
+  wrapper.className = "candidate-selection candidate-selection-history";
+
+  const header = document.createElement("div");
+
+  header.className = "candidate-selection-head";
+
+  header.textContent = "Pilihan data pada percakapan ini:";
+
+  wrapper.appendChild(header);
+
+  candidates.forEach((candidate, index) => {
+    const button = document.createElement("button");
+    const isSelected =
+      selectedCandidateId &&
+      candidate.id === selectedCandidateId;
+
+    if (isSelected) {
+      button.classList.add("selected");
+    }
+
+    button.type = "button";
+
+    button.className = "candidate-option";
+
+    // riwayat → tidak bisa diklik lagi
+    button.disabled = true;
+
+    const number = document.createElement("span");
+
+    number.className = "candidate-number";
+
+    number.textContent = isSelected
+      ? "✓"
+      : String(index + 1);
+
+    const content = document.createElement("span");
+
+    content.className = "candidate-content";
+
+    const title = document.createElement("span");
+
+    title.className = "candidate-title";
+
+    title.textContent = candidate.title || "Tanpa judul";
+
+    content.appendChild(title);
+
+    if (Array.isArray(candidate.sources) && candidate.sources.length > 0) {
+      const source = document.createElement("small");
+
+      source.className = "candidate-source";
+
+      source.textContent = candidate.sources.join(" • ");
+
+      content.appendChild(source);
+    }
+
+    button.appendChild(number);
+
+    button.appendChild(content);
+
+    wrapper.appendChild(button);
+  });
+
+  if (totalCandidates > candidates.length) {
+    const info = document.createElement("div");
+
+    info.className = "candidate-more-info";
+
+    info.textContent =
+      `Menampilkan ${candidates.length} dari ` +
+      `${totalCandidates} data yang ditemukan.`;
+
+    wrapper.appendChild(info);
+  }
+
+  chatBox.appendChild(wrapper);
+}
+
+function findSelectedCandidateIdForHistory(
+  messages,
+  candidateMessageIndex,
+) {
+  for (
+    let i = candidateMessageIndex + 1;
+    i < messages.length;
+    i++
+  ) {
+    const nextMessage = messages[i];
+
+    const nextMeta =
+      nextMessage.meta &&
+      typeof nextMessage.meta === "object"
+        ? nextMessage.meta
+        : {};
+
+    // Kalau sudah masuk candidate selection baru,
+    // berarti selection sebelumnya tidak perlu dicari lagi.
+    if (
+      nextMessage.role === "bot" &&
+      nextMeta.type === "candidate_selection"
+    ) {
+      break;
+    }
+
+    // Jawaban final setelah user memilih kandidat.
+    if (
+      nextMessage.role === "bot" &&
+      nextMeta.selected_candidate_id
+    ) {
+      return nextMeta.selected_candidate_id;
+    }
+  }
+
+  return null;
+}
+
 // ==========================================================
 // USER MEMILIH KANDIDAT
 // ==========================================================
@@ -828,6 +982,10 @@ async function selectCandidate(candidate, wrapper, clickedButton) {
       formatted.text,
 
       modelUsed + wasFallback,
+
+      formatted.meta,
+
+      apiResult.table,
     );
 
     pendingCandidateQuestion = null;
@@ -915,22 +1073,26 @@ function addBotMessage(
 
     content: text,
 
-    meta,
+    meta: meta || {},
+
+    table: table || null,
 
     timestamp: new Date().toISOString(),
   });
 }
 
-function appendMessage(text, sender) {
+function appendMessage(text, sender, meta = {}, table = null) {
   hideEmptyState();
 
-  chatBox.appendChild(createMessageElement(text, sender));
+  chatBox.appendChild(
+    createMessageElement(text, sender, meta || {}, table || null),
+  );
 
   chatHistory.push({
     role: sender,
-
     content: text,
-
+    meta: meta || {},
+    table: table || null,
     timestamp: new Date().toISOString(),
   });
 }
@@ -1162,24 +1324,19 @@ function buildTableHtml(table) {
   const hasMultiHeader =
     Array.isArray(table.header_rows) && table.header_rows.length > 0;
 
-  const hasPhysicalBodyMetadata =
-    table.body_format_metadata_loaded === true;
+  const hasPhysicalBodyMetadata = table.body_format_metadata_loaded === true;
 
   const physicalBodyMerges =
-    hasPhysicalBodyMetadata &&
-    Array.isArray(table.body_merges)
+    hasPhysicalBodyMetadata && Array.isArray(table.body_merges)
       ? table.body_merges
       : [];
 
   const fallbackRowspans =
-    !hasPhysicalBodyMetadata &&
-    Array.isArray(table.body_rowspans)
+    !hasPhysicalBodyMetadata && Array.isArray(table.body_rowspans)
       ? table.body_rowspans
       : [];
 
-  const bodyBoldCells = Array.isArray(
-    table.body_bold_cells
-  )
+  const bodyBoldCells = Array.isArray(table.body_bold_cells)
     ? table.body_bold_cells
     : [];
 
@@ -1188,10 +1345,7 @@ function buildTableHtml(table) {
   const coveredCells = new Set();
 
   const boldCells = new Set(
-    bodyBoldCells.map(
-      (item) =>
-        `${Number(item.row)}:${Number(item.col)}`
-    )
+    bodyBoldCells.map((item) => `${Number(item.row)}:${Number(item.col)}`),
   );
 
   // ========================================================
@@ -1202,42 +1356,23 @@ function buildTableHtml(table) {
     const row = Number(item.row);
     const col = Number(item.col);
 
-    const rowspan = Math.max(
-      1,
-      Number(item.rowspan || 1)
-    );
+    const rowspan = Math.max(1, Number(item.rowspan || 1));
 
-    const colspan = Math.max(
-      1,
-      Number(item.colspan || 1)
-    );
+    const colspan = Math.max(1, Number(item.colspan || 1));
 
-    mergeStartMap.set(
-      `${row}:${col}`,
-      {
-        rowspan,
-        colspan,
-        value: item.value,
-      }
-    );
+    mergeStartMap.set(`${row}:${col}`, {
+      rowspan,
+      colspan,
+      value: item.value,
+    });
 
-    for (
-      let r = row;
-      r < row + rowspan;
-      r += 1
-    ) {
-      for (
-        let c = col;
-        c < col + colspan;
-        c += 1
-      ) {
+    for (let r = row; r < row + rowspan; r += 1) {
+      for (let c = col; c < col + colspan; c += 1) {
         if (r === row && c === col) {
           continue;
         }
 
-        coveredCells.add(
-          `${r}:${c}`
-        );
+        coveredCells.add(`${r}:${c}`);
       }
     }
   });
@@ -1250,28 +1385,16 @@ function buildTableHtml(table) {
     const row = Number(item.row);
     const col = Number(item.col);
 
-    const rowspan = Math.max(
-      1,
-      Number(item.rowspan || 1)
-    );
+    const rowspan = Math.max(1, Number(item.rowspan || 1));
 
-    mergeStartMap.set(
-      `${row}:${col}`,
-      {
-        rowspan,
-        colspan: 1,
-        value: item.value,
-      }
-    );
+    mergeStartMap.set(`${row}:${col}`, {
+      rowspan,
+      colspan: 1,
+      value: item.value,
+    });
 
-    for (
-      let r = row + 1;
-      r < row + rowspan;
-      r += 1
-    ) {
-      coveredCells.add(
-        `${r}:${col}`
-      );
+    for (let r = row + 1; r < row + rowspan; r += 1) {
+      coveredCells.add(`${r}:${col}`);
     }
   });
 
@@ -1344,40 +1467,25 @@ function buildTableHtml(table) {
         return;
       }
 
-      const mergeInfo =
-        mergeStartMap.get(cellKey);
+      const mergeInfo = mergeStartMap.get(cellKey);
 
-      const rowspan =
-        mergeInfo?.rowspan || 1;
+      const rowspan = mergeInfo?.rowspan || 1;
 
-      const colspan =
-        mergeInfo?.colspan || 1;
+      const colspan = mergeInfo?.colspan || 1;
 
-      const displayValue =
-        mergeInfo?.value ?? value;
+      const displayValue = mergeInfo?.value ?? value;
 
-      const isBold =
-        boldCells.has(cellKey);
+      const isBold = boldCells.has(cellKey);
 
-      const cellClass =
-        columnIndex === 0
-          ? "table-row-label"
-          : "table-value";
+      const cellClass = columnIndex === 0 ? "table-row-label" : "table-value";
 
-      const rowspanAttr =
-        rowspan > 1
-          ? ` rowspan="${rowspan}"`
-          : "";
+      const rowspanAttr = rowspan > 1 ? ` rowspan="${rowspan}"` : "";
 
-      const colspanAttr =
-        colspan > 1
-          ? ` colspan="${colspan}"`
-          : "";
+      const colspanAttr = colspan > 1 ? ` colspan="${colspan}"` : "";
 
-      const renderedValue =
-        isBold
-          ? `<strong>${escapeHtml(displayValue)}</strong>`
-          : escapeHtml(displayValue);
+      const renderedValue = isBold
+        ? `<strong>${escapeHtml(displayValue)}</strong>`
+        : escapeHtml(displayValue);
 
       html +=
         `<td` +

@@ -287,6 +287,304 @@ class RAGUnifiedModel(BaseModel):
             b
         ).ratio()
 
+    def _fuzzy_word_match(
+        self,
+        word: str,
+        candidate_text: str,
+        threshold: float = 0.84,
+    ) -> Tuple[bool, str, float]:
+        """
+        Mencocokkan satu kata dengan kata-kata dalam candidate_text
+        untuk menangani typo ringan.
+
+        Exact match tetap menjadi prioritas.
+        """
+
+        word = self._normalize_search_text(word)
+        candidate_text = self._normalize_search_text(
+            candidate_text
+        )
+
+        if not word or not candidate_text:
+            return False, "", 0.0
+
+        # Jangan fuzzy-match kata terlalu pendek.
+        # Melindungi IPM, TPT, SIM, Sei, A, B, C, dll.
+        if len(word) <= 3:
+            return False, "", 0.0
+
+        best_word = ""
+        best_score = 0.0
+
+        for candidate_word in candidate_text.split():
+
+            # Panjang kata jangan terlalu jauh berbeda
+            if abs(
+                len(word) - len(candidate_word)
+            ) > 2:
+                continue
+
+            similarity = SequenceMatcher(
+                None,
+                word,
+                candidate_word,
+            ).ratio()
+
+            if similarity > best_score:
+                best_score = similarity
+                best_word = candidate_word
+
+        if best_score >= threshold:
+            return True, best_word, best_score
+
+        return False, "", best_score
+
+
+    def _contains_command_with_typo(
+        self,
+        question: str,
+        commands: List[str],
+        threshold: float = 0.80,
+    ) -> bool:
+        """
+        Deteksi kata perintah, termasuk typo ringan.
+
+        Contoh:
+        talbe -> tabel
+        tampikan -> tampilkan
+        donwload -> download
+        """
+
+        normalized_question = (
+            self._normalize_search_text(
+                question
+            )
+        )
+
+        if not normalized_question:
+            return False
+
+        # 1. Exact match tetap didahulukan
+        for command in commands:
+            normalized_command = (
+                self._normalize_search_text(
+                    command
+                )
+            )
+
+            if (
+                normalized_command
+                and normalized_command
+                in normalized_question
+            ):
+                return True
+
+        question_words = (
+            normalized_question.split()
+        )
+
+        # 2. Fuzzy hanya untuk command satu kata
+        for command in commands:
+
+            normalized_command = (
+                self._normalize_search_text(
+                    command
+                )
+            )
+
+            if (
+                not normalized_command
+                or " " in normalized_command
+                or len(normalized_command) <= 3
+            ):
+                continue
+
+            for word in question_words:
+
+                if len(word) <= 3:
+                    continue
+
+                if abs(
+                    len(word)
+                    - len(normalized_command)
+                ) > 2:
+                    continue
+
+                similarity = SequenceMatcher(
+                    None,
+                    word,
+                    normalized_command,
+                ).ratio()
+
+                if similarity >= threshold:
+                    return True
+
+        return False
+
+    def _get_previous_user_question(
+        self,
+        current_question: str,
+        chat_history: Optional[List[Dict]],
+    ) -> Optional[str]:
+        """
+        Ambil pertanyaan user SEBELUM pertanyaan saat ini.
+
+        Aman jika frontend ternyata sudah memasukkan
+        current_question ke dalam chat_history.
+        """
+
+        if not chat_history:
+            return None
+
+        current_normalized = (
+            self._normalize_search_text(
+                current_question
+            )
+        )
+
+        for message in reversed(chat_history):
+
+            if not isinstance(message, dict):
+                continue
+
+            role = str(
+                message.get("role", "")
+            ).lower().strip()
+
+            content = str(
+                message.get("content", "")
+            ).strip()
+
+            if role != "user" or not content:
+                continue
+
+            content_normalized = (
+                self._normalize_search_text(
+                    content
+                )
+            )
+
+            # Jika chat_history sudah memuat pertanyaan
+            # yang sedang diproses, lewati.
+            if (
+                content_normalized
+                == current_normalized
+            ):
+                continue
+
+            # Hindari mengambil follow-up pendek sebelumnya
+            # sebagai sumber konteks.
+            if self._is_data_followup_request(
+                content
+            ):
+                continue
+
+            return content
+
+        return None
+
+    def _is_data_followup_request(
+        self,
+        question: str,
+    ) -> bool:
+        """
+        Deteksi permintaan lanjutan yang merujuk pada data sebelumnya
+        tanpa menyebut ulang topik datanya.
+        """
+
+        q = self._normalize_search_text(
+            question
+        )
+
+        if not q:
+            return False
+
+        followup_patterns = [
+            r"\btabelnya\b",
+            r"\bdatanya\b",
+            r"\brinciannya\b",
+            r"\bdetailnya\b",
+            r"\btampilkan tabel\b",
+            r"\btunjukkan tabel\b",
+            r"\bmenunjukkan tabel\b",
+            r"\blihat tabel\b",
+            r"\bdownload datanya\b",
+            r"\bunduh datanya\b",
+        ]
+
+        return any(
+            re.search(pattern, q)
+            for pattern in followup_patterns
+        )
+
+    def _acronym_matches_text(
+        self,
+        acronym: str,
+        text: str,
+    ) -> bool:
+        """
+        Deteksi singkatan berdasarkan huruf awal
+        dari rangkaian kata pada judul.
+
+        Contoh:
+        IPM  -> Indeks Pembangunan Manusia
+        TPT  -> Tingkat Pengangguran Terbuka
+        TPAK -> Tingkat Partisipasi Angkatan Kerja
+        PDRB -> Produk Domestik Regional Bruto
+        """
+
+        acronym = self._normalize_search_text(
+            acronym
+        ).replace(" ", "")
+
+        text = self._normalize_search_text(
+            text
+        )
+
+        if not acronym or not text:
+            return False
+
+        # Hanya perlakukan token 2-6 huruf
+        # sebagai kandidat singkatan.
+        if (
+            not acronym.isalpha()
+            or len(acronym) < 2
+            or len(acronym) > 6
+        ):
+            return False
+
+        words = [
+            word
+            for word in text.split()
+            if word.isalpha()
+        ]
+
+        acronym_length = len(acronym)
+
+        if len(words) < acronym_length:
+            return False
+
+        # Cek setiap rangkaian kata berurutan.
+        for index in range(
+            len(words) - acronym_length + 1
+        ):
+
+            selected_words = words[
+                index:index + acronym_length
+            ]
+
+            generated_acronym = "".join(
+                word[0]
+                for word in selected_words
+                if word
+            )
+
+            if generated_acronym == acronym:
+                return True
+
+        return False
+
+
     def _calculate_candidate_score(
         self,
         question: str,
@@ -368,13 +666,19 @@ class RAGUnifiedModel(BaseModel):
             )
 
         # =========================================================
-        # MATCH KEYWORD INDIVIDUAL
+        # MATCH KEYWORD INDIVIDUAL + TYPO FALLBACK
         # =========================================================
 
         matched_keywords = []
+        acronym_matched_keywords = []
+        fuzzy_matched_keywords = []
+        fuzzy_matches = {}
 
         for keyword in keywords:
 
+            # =====================================================
+            # 1. Exact match tetap menjadi prioritas utama
+            # =====================================================
             if any(
                 keyword in candidate_text
                 for candidate_text
@@ -383,9 +687,73 @@ class RAGUnifiedModel(BaseModel):
                 matched_keywords.append(
                     keyword
                 )
+                continue
+
+            # =====================================================
+            # 2. Cek apakah keyword merupakan singkatan judul
+            # =====================================================
+            if any(
+                self._acronym_matches_text(
+                    keyword,
+                    candidate_text,
+                )
+                for candidate_text
+                in searchable_titles
+            ):
+                acronym_matched_keywords.append(
+                    keyword
+                )
+                continue
+
+            # =====================================================
+            # 3. Jika exact dan acronym gagal,
+            #    baru coba toleransi typo
+            # =====================================================
+            best_fuzzy_word = ""
+            best_fuzzy_score = 0.0
+
+            for candidate_text in searchable_titles:
+
+                (
+                    fuzzy_matched,
+                    fuzzy_word,
+                    fuzzy_score,
+                ) = self._fuzzy_word_match(
+                    keyword,
+                    candidate_text,
+                )
+
+                if (
+                    fuzzy_matched
+                    and fuzzy_score
+                    > best_fuzzy_score
+                ):
+                    best_fuzzy_word = fuzzy_word
+                    best_fuzzy_score = fuzzy_score
+
+            if best_fuzzy_word:
+
+                fuzzy_matched_keywords.append(
+                    keyword
+                )
+
+                fuzzy_matches[keyword] = {
+                    "matched_word":
+                        best_fuzzy_word,
+                    "similarity": round(
+                        best_fuzzy_score,
+                        3,
+                    ),
+                }
+
+        total_matched_keywords = (
+            len(matched_keywords)
+            + len(acronym_matched_keywords)
+            + len(fuzzy_matched_keywords)
+        )
 
         raw_coverage = (
-            len(matched_keywords)
+            total_matched_keywords
             / len(keywords)
         )
 
@@ -437,9 +805,10 @@ class RAGUnifiedModel(BaseModel):
 
         coverage = raw_coverage
 
+
         if (
             len(keywords) >= 3
-            and len(matched_keywords) >= 2
+            and total_matched_keywords >= 2
         ):
             coverage = max(
                 coverage,
@@ -481,10 +850,25 @@ class RAGUnifiedModel(BaseModel):
         ):
             score += 35
 
-        # Keyword biasa.
+        # Keyword exact.
         score += (
             len(matched_keywords)
             * 10
+        )
+
+        # Singkatan yang cocok dengan kepanjangan pada judul.
+        # Diberi bobot sama dengan exact karena acronym
+        # merupakan representasi langsung dari nama indikator.
+        score += (
+            len(acronym_matched_keywords)
+            * 10
+        )
+
+        # Keyword yang cocok melalui toleransi typo.
+        # Bobot sengaja lebih kecil daripada exact/acronym.
+        score += (
+            len(fuzzy_matched_keywords)
+            * 6
         )
 
         # Bonus frasa persis.
@@ -528,6 +912,12 @@ class RAGUnifiedModel(BaseModel):
             ),
             "matched_keywords":
                 matched_keywords,
+            "acronym_matched_keywords":
+                acronym_matched_keywords,
+            "fuzzy_matched_keywords":
+                fuzzy_matched_keywords,
+            "fuzzy_matches":
+                fuzzy_matches,
             "matched_phrases":
                 matched_phrases,
             "exact": exact,
@@ -1237,7 +1627,13 @@ class RAGUnifiedModel(BaseModel):
                 "tabel", "tampilkan", "rinci", "rincian", "lengkap",
                 "semua data", "daftar", "excel", "unduh", "download", "csv"
             ]
-            include_table = any(kw in q_lower for kw in table_keywords)
+            include_table = (
+                self._contains_command_with_typo(
+                    question,
+                    table_keywords,
+                    threshold=0.80,
+                )
+            )
 
 
             # ===== 1. PUBLICATION INTENT =====
@@ -1286,9 +1682,64 @@ class RAGUnifiedModel(BaseModel):
                     success=True
                 )
 
-            # ===== 1b. PRE-CHECK: Pertanyaan layanan / fitur / bantuan =====
+            # ===== 1b. PRE-CHECK: Informasi dasar BPS =====
+            bps_basic_patterns = [
+                r"^bps$",
+                r"^badan pusat statistik$",
+
+                r"\bapa itu bps\b",
+                r"\bbps itu apa\b",
+
+                r"\bapa itu badan pusat statistik\b",
+                r"\bbadan pusat statistik itu apa\b",
+
+                r"\bapa kepanjangan bps\b",
+                r"\bkepanjangan bps\b",
+
+                r"\bpengertian bps\b",
+                r"\bpengertian badan pusat statistik\b",
+
+                r"\bjelaskan bps\b",
+                r"\bjelaskan badan pusat statistik\b",
+            ]
+
+            is_bps_basic_query = any(
+                re.search(
+                    pattern,
+                    q_lower,
+                    flags=re.IGNORECASE,
+                )
+                for pattern in bps_basic_patterns
+            )
+
+            if is_bps_basic_query:
+                return ModelResponse(
+                    answer=(
+                        "**Badan Pusat Statistik (BPS)** merupakan **Lembaga Pemerintah Non Kementerian "
+                        "yang bertanggung jawab langsung kepada Presiden**. "
+                        "BPS mempunyai tugas melaksanakan tugas pemerintahan di bidang "
+                        "kegiatan statistik sesuai dengan ketentuan peraturan "
+                        "perundang-undangan.\n\n"
+                        "**Sumber:** Profil BPS – Portal PPID Badan Pusat Statistik"
+                        " [ https://ppid.bps.go.id/app/konten/1218/Profil-BPS.html ] "
+                    ),
+                    sources=[
+                        Source(
+                            name="Badan Pusat Statistik",
+                            url="https://ppid.bps.go.id",
+                        )
+                    ],
+                    meta={
+                        "provider": "rag_unified",
+                        "type": "bps_basic_info",
+                        "model_used": "none",
+                    },
+                    success=True,
+                )
+
+            # ===== 1c. PRE-CHECK: Pertanyaan layanan / fitur / bantuan =====
             info_keywords = [
-                "layanan", "fitur", "bisa apa", "kamu bisa", "kemampuan",
+                "bps", "badan pusat statistik", "layanan", "fitur", "bisa apa", "kamu bisa", "kemampuan",
                 "bantuan", "help", "cara pakai", "cara menggunakan",
                 "alamat", "jam layanan", "jam buka", "kontak", "email",
                 "telepon", "media sosial", "unduh", "download",
@@ -1330,10 +1781,10 @@ class RAGUnifiedModel(BaseModel):
                     table=None
                 )
             
-            # ===== 2. SEARCH DI DATABASE SPREADSHEET =====
+
             # ============================================================
-    # ===== 2. SEARCH CANDIDATES ================================
-    # ============================================================
+            # ===== 2. SEARCH CANDIDATES ================================
+            # ============================================================
 
             selected_candidate_id = None
 
@@ -1344,9 +1795,43 @@ class RAGUnifiedModel(BaseModel):
                     )
                 )
 
+            # ============================================================
+            # FOLLOW-UP KE DATA SEBELUMNYA
+            # ============================================================
+
+            search_question = question
+
+            if self._is_data_followup_request(
+                question
+            ):
+
+                previous_question = (
+                    self._get_previous_user_question(
+                        question,
+                        chat_history,
+                    )
+                )
+                print(
+                    "🔁 Follow-up data detected:",
+                    question,
+                    "-> using previous question:",
+                    previous_question,
+                )
+
+                if previous_question:
+                    search_question = previous_question
+
+                    print(
+                        "🔁 Follow-up data detected:",
+                        question,
+                        "-> using previous question:",
+                        previous_question,
+                    )
+
+
             candidate_groups = (
                 await self._find_candidate_groups(
-                    question
+                    search_question
                 )
             )
 
@@ -1487,7 +1972,7 @@ class RAGUnifiedModel(BaseModel):
             resolved = (
                 await self._resolve_best_variant(
                     selected_group,
-                    question,
+                    search_question,
                 )
             )
 
@@ -1716,6 +2201,32 @@ class RAGUnifiedModel(BaseModel):
 
                         type="definition",
                     )
+                )
+
+            if (
+                include_table
+                and self._is_data_followup_request(question)
+            ):
+                return ModelResponse(
+                    answer=(
+                        "Tentu, berikut tabel **"
+                        f"{judul}"
+                        "** yang sebelumnya Anda tanyakan."
+                    ),
+                    sources=sources,
+                    table=table_payload,
+                    meta={
+                        "provider": "rag_unified",
+                        "source": "rekap_sheet",
+                        "selected_candidate_id": (
+                            selected_group["candidate_id"]
+                        ),
+                        "selected_title": judul,
+                        "used_year": resolved.get("year"),
+                        "model_used": "none",
+                        "followup_table": True,
+                    },
+                    success=True,
                 )
 
             return await self._generate_with_fallback(

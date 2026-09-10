@@ -81,11 +81,25 @@ export async function asksergAI(question, userId = "web-user", options = {}) {
     const requestBody = {
       question: cleanQuestion,
 
-      userId,
+      user_id: userId,
 
       timestamp: new Date().toISOString(),
 
       context: Object.keys(context).length > 0 ? context : null,
+
+      chat_history: Array.isArray(options?.chatHistory)
+        ? options.chatHistory
+            .map((message) => ({
+              role: message.role,
+              content: message.content,
+            }))
+            .filter(
+              (message) =>
+                message.role &&
+                message.content,
+            )
+            .slice(-12)
+        : [],
     };
 
     console.log("📤 SERGAI REQUEST:", requestBody);

@@ -14,6 +14,7 @@ import { asksergAI, formatBotResponse } from "./api.js";
 const chatBox = document.getElementById("chatBox");
 
 const userInput = document.getElementById("userInput");
+const questionGuide = document.getElementById("questionGuide");
 
 const typingIndicator = document.getElementById("typingIndicator");
 
@@ -442,17 +443,29 @@ document.addEventListener("DOMContentLoaded", () => {
 // ==========================================================
 
 function setupEventListeners() {
+  // ==========================================================
+  // KIRIM PESAN DENGAN ENTER
+  // ==========================================================
+
   userInput.addEventListener("keypress", (event) => {
     if (event.key === "Enter" && !isWaitingResponse) {
       sendMessage();
     }
   });
 
+  // ==========================================================
+  // TOMBOL KIRIM
+  // ==========================================================
+
   sendBtn?.addEventListener("click", () => {
     if (!isWaitingResponse) {
       sendMessage();
     }
   });
+
+  // ==========================================================
+  // MODAL INFORMASI
+  // ==========================================================
 
   infoBtn?.addEventListener("click", showInfo);
 
@@ -466,13 +479,76 @@ function setupEventListeners() {
     }
   });
 
+  // ==========================================================
+  // AUTO RESIZE INPUT
+  // ==========================================================
+
   userInput.addEventListener("input", autoResizeInput);
+
+  // ==========================================================
+  // CONTOH PERTANYAAN
+  // ==========================================================
+
+  // Saat kolom input diklik/focus dan masih kosong,
+  // tampilkan contoh pertanyaan.
+  userInput.addEventListener("click", () => {
+    if (!userInput.value.trim()) {
+      questionGuide?.classList.add("show");
+    }
+  });
+
+  // Saat user mulai mengetik, panel contoh disembunyikan.
+  // Jika input kembali kosong, panel ditampilkan lagi.
+  userInput.addEventListener("input", () => {
+    if (userInput.value.trim()) {
+      questionGuide?.classList.remove("show");
+    } else {
+      questionGuide?.classList.add("show");
+    }
+  });
+
+  // Klik salah satu contoh pertanyaan:
+  // masukkan pertanyaan ke kolom input agar masih bisa diedit user.
+  questionGuide?.querySelectorAll(".question-guide-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      const question = item.dataset.question || "";
+
+      if (!question) {
+        return;
+      }
+
+      userInput.value = question;
+
+      questionGuide.classList.remove("show");
+
+      userInput.focus();
+    });
+  });
+
+  // Klik di luar input/panel → tutup panel contoh.
+  document.addEventListener("click", (event) => {
+    const clickedInput = userInput.contains(event.target);
+
+    const clickedGuide = questionGuide?.contains(event.target);
+
+    if (!clickedInput && !clickedGuide) {
+      questionGuide?.classList.remove("show");
+    }
+  });
+
+  // ==========================================================
+  // SESSION / SIDEBAR
+  // ==========================================================
 
   newChatBtn?.addEventListener("click", startNewSession);
 
   sidebarOpen?.addEventListener("click", toggleSidebar);
 
   sidebarClose?.addEventListener("click", closeSidebar);
+
+  // ==========================================================
+  // LOGOUT
+  // ==========================================================
 
   logoutBtn?.addEventListener("click", () => {
     if (!confirm("Keluar dari akun Anda?")) {
@@ -485,6 +561,10 @@ function setupEventListeners() {
 
     window.location.href = "/";
   });
+
+  // ==========================================================
+  // SHORTCUT SIDEBAR CTRL + B
+  // ==========================================================
 
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
@@ -528,7 +608,9 @@ function sendMessage() {
 
   showTyping();
 
-  asksergAI(text, userInfo.email)
+  asksergAI(text, userInfo.email, {
+    chatHistory: chatHistory,
+  })
     .then((apiResult) => {
       console.log("🔍 TABLE PAYLOAD:", apiResult.table);
 
@@ -933,6 +1015,7 @@ async function selectCandidate(candidate, wrapper, clickedButton) {
 
       {
         selectedCandidateId: candidate.id,
+        chatHistory: chatHistory,
       },
     );
 

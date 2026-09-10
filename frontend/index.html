@@ -112,15 +112,58 @@
       </div>
 
       <!-- INPUT AREA -->
+      <!-- INPUT AREA -->
       <div class="input-area">
-        <div class="input-wrapper">
-          <input
-            type="text"
-            id="userInput"
-            placeholder="Tanya data statistik..."
-            autocomplete="off"
-          />
+        <div class="input-guide-wrapper">
+          <!-- Contoh pertanyaan muncul saat input diklik -->
+          <div class="question-guide" id="questionGuide">
+            <div class="question-guide-title">Contoh pertanyaan</div>
+
+            <div class="question-guide-list">
+              <div
+                class="question-guide-item"
+                data-question="Berapa jumlah penduduk tahun 2025?"
+              >
+                “Berapa jumlah penduduk tahun 2025?”
+              </div>
+
+              <div
+                class="question-guide-item"
+                data-question="Saya mau data PDRB tahun 2025"
+              >
+                “Saya mau data PDRB tahun 2025”
+              </div>
+
+              <div
+                class="question-guide-item"
+                data-question="Tampilkan tabel jumlah penduduk"
+              >
+                “Tampilkan tabel jumlah penduduk”
+              </div>
+
+              <div
+                class="question-guide-item"
+                data-question="Cari publikasi Kecamatan Sei Rampah"
+              >
+                “Cari publikasi Kecamatan Sei Rampah”
+              </div>
+
+              <div class="question-guide-item" data-question="Apa itu IPM?">
+                “Apa itu IPM?”
+              </div>
+            </div>
+          </div>
+
+          <div class="input-wrapper">
+            <input
+              type="text"
+              id="userInput"
+              placeholder="Tanya data statistik..."
+              autocomplete="off"
+            />
+          </div>
         </div>
+
         <button class="send-btn" id="sendBtn">
           <i class="fas fa-paper-plane"></i>
         </button>
@@ -145,14 +188,20 @@
             Assistant Intelligence)
           </p>
           <p>
-            Asisten virtual resmi BPS Kabupaten Serdang Bedagai, dikembangkan
-            oleh <strong>Elgresia</strong>
+            Asisten virtual resmi BPS Kabupaten Serdang Bedagai, dibangun oleh
+            <strong
+              >Elgresia E. Br Perangin-angin untuk Gagasan Kreatif Aktualisasi
+              Pelatihan Dasar CPNS BPS</strong
+            >
           </p>
           <br />
           <p><strong>Fitur:</strong></p>
           <ul style="margin-left: 20px; margin-top: 5px">
-            <li>📊 Akses data statistik real-time via BPS WebAPI</li>
-            <li>📖 Penjelasan konsep statistik dari publikasi resmi</li>
+            <li>
+              📊 Akses data statistik real-time via BPS WebAPI dan Tabel pada
+              Publikasi Serdang Bedagai Dalam Angka
+            </li>
+            <li>📖 Link menuju publikasi BPS</li>
             <li>💬 Tanya jawab data BPS Kab. Serdang Bedagai</li>
           </ul>
           <br />
